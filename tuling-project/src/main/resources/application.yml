@@ -1,0 +1,9 @@
+server:
+  port: 8889
+spring:
+  servlet:
+    multipart:
+      max-file-size: 300MB
+      max-request-size: 300MB
+  application:
+    name: tuling-project

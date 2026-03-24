@@ -1,0 +1,114 @@
+1.第一步配置优雅停机配置，可以到公共的nacos配置文件中新增如下配置
+#开启优化关闭
+server:
+  shutdown: graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+2.修改start.sh脚本（kill -9修改成kill -15且stop kill -15后需要睡眠下20s）
+#!/bin/bash
+#这里可替换为你自己的执行程序，其他代码无需更改
+APP_NAME=pay-datasync-cloud-start.jar
+#使用说明，用来提示输入参数
+usage() {
+echo "Usage: sh start.sh [start|stop|restart|status]"
+exit 1
+}
+#检查程序是否在运行
+is_exist(){
+pid=`ps -ef|grep $APP_NAME|grep -v grep|awk '{print $2}' `
+#如果不存在返回1，存在返回0
+if [ -z "${pid}" ]; then
+return 1
+else
+return 0
+fi
+}
+#启动方法
+start(){
+is_exist
+if [ $? -eq "0" ]; then
+echo "${APP_NAME} is already running. pid=${pid} ."
+else
+#nohup java  -Xms512m -Xmx1024m -XX:NewRatio=2 -XX:SurvivorRatio=8 -XX:+PrintGCDetails -XX:+UseSerialGC -jar /usr/local/work/lcn/$APP_NAME > log.txt &
+nohup java -Dfile.encoding=UTF-8 -XX:HeapDumpPath=/logs/heapdump/paydatasync.hprof  -jar $APP_NAME  > app.log 2>&1 &
+echo "${APP_NAME} start success"
+fi
+}
+#停止方法
+stop(){
+is_exist
+if [ $? -eq "0" ]; then
+kill -15 $pid
+echo "Send SIGTERM to ${APP_NAME}, waiting for graceful shutdown..."
+sleep 20
+else
+echo "${APP_NAME} is not running"
+fi
+}
+#输出运行状态
+status(){
+is_exist
+if [ $? -eq "0" ]; then
+echo "${APP_NAME} is running. Pid is ${pid}"
+else
+echo "${APP_NAME} is NOT running."
+fi
+}
+#重启
+restart(){
+stop
+start
+}
+#根据输入参数，选择执行对应方法，不输入则执行使用说明
+case "$1" in
+"start")
+start
+;;
+"stop")
+stop
+;;
+"status")
+status
+;;
+"restart")
+restart
+;;
+*)
+usage
+;;
+esac
+
+3.docker-compose.yml 配置重点
+（1）yml配置文件
+version: "3.8"
+
+services:
+  pay-service:
+    image: mycompany/pay-service:latest
+    container_name: pay-service
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+    stop_signal: SIGTERM
+    stop_grace_period: 40s
+（2）yml的参数说明
+stop_signal：指定当执行docker stop或 docker-compose stop时发给容器的信号，Spring Boot支持的优雅关闭信号是SIGTERM（默认即可）。
+stop_grace_period：容器在收到SIGTERM后等待的时间（例如40秒），超过此时间仍未退出，Docker才会发SIGKILL强制杀掉。
+（3）验证优雅关闭是否生效
+    1.启动容器：docker-compose up -d
+    2.进入容器：docker exec -it pay-service bash
+    3.在里面执行：ps -ef | grep java
+    4.在宿主机执行：docker stop pay-service
+    5.查看容器日志：docker logs pay-service
+    6.如果看到类似（可以直接到java项目的文件中根据容器到日志中搜索如下日志）
+        Tomcat stopped gracefully	正在使用 Tomcat
+        UndertowWebServer - Graceful shutdown complete	正在使用 Undertow
+        JettyWebServer - Jetty stopped gracefully	正在使用 Jetty
+    7.说明优雅关闭成功。
+
+
+

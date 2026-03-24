@@ -1,0 +1,66 @@
+1.spring的事务，连接对象与事务对象一一对应，事务对象管理的是连接
+2.在一个类中使用@Bean注入ioc时要注意的地方
+    在方法上加一个@Bean注解，然后在这个方法中去获取类中获取@Value注解的成员变量依赖注入时，能获取得到，加了@Bean注解后的方法
+    是通过factoryMethod的方式注入到ioc容器中的，且以方法名为BeanName注入的，而且是以@Bean方法的返回对象中factoryMethod注入的，
+    而不是以方法所在的类的factoryMethod注入的，且方法所在的类的factoryMethod属性是为null的。
+3.spring注解开启事务
+    (1)使用@EnableTransactionManagement开启spring注解事务
+    (2)这个注解中引入了@Import(TransactionManagementConfigurationSelector.class)
+    (3)TransactionManagementConfigurationSelector这个类中有一个selectImports这个方法
+    (4)selectImports这个方法是在ConfigurationClassPostProcessor类的ConfigurationClassParser569行掉的调用的
+    (5)这个方法里面会注入两个bean分别是AutoProxyRegistrar和ProxyTransactionManagementConfiguration
+    (6)AutoProxyRegistrar这个类中会注入aop的入口类InfrastructureAdvisorAutoProxyCreator,但实际上这个AOP入口类起不了作用
+       因为这个入口类优先级最低，而在aop的注入过程中已经注入了AnnotationAwareAspectJAutoProxyCreator这个入口类，这个入口
+       类优先级是最高的，还有一个AspectJAwareAdvisorAutoProxyCreator类这个是解析aop的xml用的,这个优先级排在第二
+    (7)ProxyTransactionManagementConfiguration这个类是创建事务切面，transactionAdvisor这个方法会注入一个advisor对象，
+       advisor对象里面会set两个值分别是TransactionAttributeSource和TransactionInterceptor
+    (8)TransactionAttributeSource值是从transactionAttributeSource()方法中返回的，这个方法的作用是解析@Transactional注解，
+        将注解中的属性包装成TransactionAttributeSource；
+    (8)TransactionInterceptor值是从transactionInterceptor()方法中返回的，这个方法里面创建一个TransactionInterceptor对象，
+       这个类实现了MethodInterceptor接口，这个里面有一个invoke方法，这个是在链式调用的时候会去调用，这个方法就是对方法
+       进行增强也就是实现事务的方法，里面也会注入一个TransactionAttributeSource对象(@Transactional注解属性信息的包装类)
+    (9)总结ProxyTransactionManagementConfiguration类：
+        BeanFactoryTransactionAttributeSourceAdvisor transactionAdvisor()方法：用来创建事务切面实例，在创建这个实例的
+                过程中会将注入TransactionAttributeSource对象、TransactionInterceptor对象，还有就是创建一个pointcut对象
+                这个是表达式；这个Bean就是一个Advisor(切面)；
+        TransactionAttributeSource transactionAttributeSource()方法：用来创建解析@Transactional注解，且将注解中的属性
+                                                                     包装成TransactionAttributeSource对象；
+            TransactionInterceptor transactionInterceptor()方法：用来创建事务的advice(增强点)，创建一个TransactionInterceptor
+                    对象，这个类实现了MethodInterceptor接口，这里面有一个invoke方法，这个事在链式调用的时候会去调用，也
+                    就是实现事务增强的方法；这个对象中会注入一个数据库的数据源对象txManager，这个对象可以通过
+                    实现TransactionManagementConfigurer接口注入一个数据源，也可以使用@Bean的形式，
+                    使用DataSourceTransactionManager对象注入一个DataSource数据源，这个数据源是自己定义的。
+4.当调用带有注解事务的方法时，就会进入JdkDynamicAopProxy的invoke方法
+    (1)进入invoke方法这个方法里面会去判断是否存在拦截链，其实也就是是否存在advice对象的集合，不存在则说明这个方法
+       不需要拦截，也就是不需要开启事务，直接反射调用代理的方法；
+    (2)如果方法上存在事务，则会调用拦截方法的拦截链，这里会调用TransactionInterceptor类这个类实现了MethodInterceptor接口，
+       所以会调用这个接口中的invoke方法，这里面就是具体对事务的一些操作；
+    (3)这个invoke方法会调用父类中的invokeWithinTransaction()方法，这个方法里面就是具体的对方法进行事务的操作；
+    (4)进入TransactionAttributeSource的父类AbstractFallbackTransactionAttributeSource类中的getTransactionAttribute()方法，
+       这个方法里面有一个computeTransactionAttribute()方法--》findTransactionAttribute()方法--》determineTransactionAttribute()方法
+       --》进入SpringTransactionAnnotationParser类中的parseTransactionAnnotation()方法--》parseTransactionAnnotation()方法，
+       这个方法里面就是具体的实现获取注解属性的代码；
+    (5)在determineTransactionManager()方法中获取事务管理器PlatformTransactionManager，这个在ProxyTransactionManagementConfiguration
+       类中已经注入了；
+    (6)最主要的是进入createTransactionIfNecessary()方法，这个方法是创建一个TransactionInfo的事务连接
+    (7)再就是一个火炬传递的调用invocation.proceedWithInvocation()，传递给下一个aop链
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

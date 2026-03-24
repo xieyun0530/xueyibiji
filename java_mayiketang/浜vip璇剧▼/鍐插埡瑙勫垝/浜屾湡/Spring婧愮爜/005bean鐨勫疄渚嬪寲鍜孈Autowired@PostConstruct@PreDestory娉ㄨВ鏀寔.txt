@@ -1,0 +1,106 @@
+1.AbstractApplicationContext的refresh()方法下的finishBeanFactoryInitialization(beanFactory);
+  作用：
+        1、bean实例化过程
+        2、ioc
+        3、注解支持
+        4、BeanPostProcessor的执行
+        5、Aop的入口
+  (1)RootBeanDefinition getMergedLocalBeanDefinition(String beanName)将父类合并到子类中称为一个比较全面的子类
+     RootBeanDefinition,这个类定义了：
+        定义了id、别名与Bean的对应关系（BeanDefinitionHolder）
+        Bean的注解（AnnotatedElement）
+        具体的工厂方法（Class类型），包括工厂方法的返回类型，工厂方法的Method对象
+        构造函数、构造函数形参类型
+        Bean的class对象
+  (2)寻找当前正在实例化的bean中有@Autowired注解的构造函数，获取构造函数中的参数，到spring容器中获取构造参数的值，
+     如果是引用类型这会触发该引用类型的beanFactory.getBean(beanName)方法，从容器中获取该参数，使用反射机制将进行
+     实例化Bean，返回一个BeanWrapper。
+  (3)如果是无参这不会走上面的，直接使用反射机制进行实例化Bean，返回一个BeanWrapper。
+  (4)对类中注解的装配过程,CommonAnnotationBeanPostProcessor支持了@PostConstruct，@PreDestroy,@Resource注解，
+     AutowiredAnnotationBeanPostProcessor 支持 @Autowired,@Value注解，扫描类中的属性是否带有这些注解，把属性中
+     带了这些注解的参数包装成RootBeanDefinition，参数的引用类型的会触发beanFactory.getBean(beanName)方法，
+     从容器中获取该参数，也就是获取bean。
+  (5)现在有了BeanWrapper对象和Bean对象中的参数RootBeanDefinition，就可以实现ioc的依赖注入，使用反射机制实现
+     BeanWrapper参数的依赖注入。
+  (6)调用方法invokeAwareMethods(final String beanName, final Object bean),这个方法是调用实现了Aware接口的类，
+     该方法处理 Aware接口的顺序：BeanNameAware -> BeanClassLoaderAware -> BeanFactoryAware
+  (7)调用加载完bean后需要调用的方法，被@PostConstruct修饰的方法。
+  (8)调用InitializingBean类的afterPropertiesSet方法，调用InitMethod中配置的方法。
+  (9)实例化好的bean缓存起来,且注册销毁时的类DisposableBeanAdapter。
+
+2.@Autowired依赖注入过程,依赖注入只能发生在单例中
+    @PreDestroy注入过程，属性注入的时候注入，那怎样达到bean销毁时执行呢？
+    这个销毁方法会在bean完成实例化且ioc注入完成后，在注册前会把bean注册一个bean销毁前的类，这个方法在servlet里面
+    有一个监听器，这里在容器销毁也就是线程死亡，或者说服务器关闭是会去调用这个destroyMethod销毁前的方法，这个方法主要
+    用于释放一些资源用的，也就是其实也就是这个bean销毁方法跟spring没有关系了，而是gc去做的。
+    注解的意思：
+        @PostConstruct(用于在依赖关系注入完成之后需要执行的方法上，以执行任何初始化)
+        @PreDestroy(销毁bean时调用的方法)
+        Aware(它是一个空接口，调用是通过这个接口找到它的子接口，在调用子接口的实现类)
+    (1)先从缓存中拿，第一次肯定没有拿不到
+    (2)把beanName添加到SingletonsCurrentlyInCreation(正在实例化的Bean)容器中；
+    (3)使用反射机制创建实例，创建实例的过程中会去寻找@Autowired注解的构造函数；
+    (4)如果有则会注入带有@Autowired注解的，注入的时候就会走第一步也就是会触发getBean()方法；
+    (5)如果没有带有@Autowired注解的构造函数，则走普通构造器实例化方法；
+    (6)扫描类中带有@Autowired、@PostConstruct，@PreDestroy,@Resource、@Autowired,@Value注解，
+       将其装配到RootBeanDefinition对象中；
+    (8)这里会将实例化了但是没有赋值的bean先放入到三级缓存中；(用于循环依赖)
+    (7)现在RootBeanDefinition对象中参数和实例都有了，就可以进行IOC注入了；
+    (8)循环每个带有@Autowired或者@Resource注解的属性进行依赖注入，这里跟构造函数依赖注入一样，也是会触发getBean()方法；
+    (9)依赖注入完成后，调用Aware方法(猜测调用BeanNameAware接口的实现类缓存beanName，还有调用BeanFactoryAware的
+       实现类缓存BeanFactory的)；
+    (10)对类的某些方法上的@PostConstruct注解，继承了Aware接口的实现类，init-method属性调用；
+    (11)实例化好的bean缓存起来；
+    (12)这里有一个FactoryBean，来判断这个类有没有实现FactoryBean接口，如果有则判断beanName不是以&开头，&开头的bean返回
+        使用注解注入的bean(也就是实现了FactoryBean接口的那个bean)，如果不是&开头的bean则返回实现了FactoryBean接口的bean；
+    (13)删除singletonsCurrentlyInCreation中的beanName；
+    (14)把创建好的BeanDefinition缓存到一级缓存中，删除二级缓存和三级缓存。
+3.循环依赖问题
+   假设A类注入了B对象，B类注入了A对象，注入过程如下：
+   (1)A类调用getBean()方法,
+   (2)第一次拿不到实例，则调用getSingleton方法创建bean实例；
+   (3)创建bean的时候，先将beanName存入SingletonsCurrentlyInCreation(正在实例化的Bean)容器中;
+   (4)调用createBean方法，将对象进行无参构造函数实例化之后，将这个对象工厂放入三级缓存中；
+   (5)进行依赖注入，这个时候会触发getBean方法区获取b对象的值，所有又走回了第一个步；
+   (6)当B对象调用getBean方法走到依赖注入的时候，则会去获取A对象，又会触发getBean方法；
+   (7)但是这个时候A对象已经在三级缓存存在了，所以这个时候就会从三级缓存拿到A对象的实例返回A对象的实例(这里从三级缓存
+     拿到后A实例后会删除三级缓存，将其升级到二级缓存)，B类就可以实现对A对象的注入；
+   (8)B类完成注入A类后，完成依赖注入完以后的调用等操作后，把实例化好的bean缓存起来；
+   (9)删除singletonsCurrentlyInCreation中的BeanName，创建完成后，将B类实例化后的对象放入到一级缓存；
+   (10)B类实例化成BeanDefinition完成；
+   (11)A类中调用的getBean方法就返回B类的实例进行注入，至此整个依赖注入完成。
+   SingletonsCurrentlyInCreation(正在实例化的Bean)这个的作用：用来阻断有参构造函数的循环依赖的。
+   二级缓存是用来解决：A引用了B和C，B引用了A，C又引用了A；
+   因为三级缓存需要循环到BeanPostProcessors的接口实现类中去拿，而放入到二级缓存可以直接拿到实例。
+4.getBean中为什么要设计三个缓存？
+    一级缓存(singletonObject)存的是创建完成了的实例
+    二级缓存(earlySingletonObjects)存的是从三级缓存的工厂中的对象
+    三级缓存(singletonFactories)存的是对象工厂，这里三级缓存的作用的是为了拿到修改后的bean，因为实例化完成bean后
+    三级缓存存的是ObjectFactory的bean工厂，比如使用aop代理时，当从三级缓存去拿bean实例的时候，会去循环获取bean代理
+    的实例，升级存入到二级缓存，还有可以去实现BeanPostProcessor接口的一些子类去修改这个bean，这里存bean工厂，也会去
+    拿到修改后的bean存入缓存中，所有这个三级缓存是很有必要的。
+    对象工厂是getEarlyBeanReference这个方获取的，这个方法会去循环实现了BeanPostProcessor接口的增强方法，返回已经增强了的
+    bean对象工厂。
+    如果在循环依赖中出现一个对象被多次依赖时，使用二级缓存能提供效率，因为再次去三级缓存获取需要再次循环BeanPostProccessor
+    的实现类，效率太低了
+
+
+5.IOC的流程
+ioc的流程对于bean来说要经历实例化跟初始化两个过程。所谓的循环依赖本质就是在初始化这个步骤发生的问题，
+即存在场景：A对象持有成员变量B对象，B对象持有成员变量A对象。假设A先进行createBean操作，此时A完成了实例化，
+要进行初始化过程（DI，注入B对象），发现B对象不存在于容器中，因此需要触发B对象的createBean操作，而B对象完成实例化后，
+要进行初始化过程中又需要DI注入A对象，此时拿不到A对象，因为A对象此时卡在了初始化过程。
+
+为此Spring通过缓存的方式来解决循环依赖问题，解决问题的核心就是缓存（提前暴露）一个完成实例化的对象。
+从上述场景来说A对象在实例化后先往缓存里面保存自己，当触发B的createBean操作的时候，B在初始化过程就可以从缓存中拿到A对象，
+从而完成B对象的初始化过程，那么当B的createBean操作完成后，A的初始化流程就可以继续完成了。因为此时可以拿到B对象了。
+
+那么为什么Spring要采用三级缓存而不是二级缓存来解决呢？首先Spring三级缓存中，一级缓存的是初始化对象，
+二级缓存的是实例化对象，三级缓存的是函数接口对象。
+
+从上述例子来说只需要二级缓存同样可以解决循环问题，即每次对象完成实例化操作后保存到二级缓存。
+但是存在一个问题：bean对象在完成初始化后有可能就是对象本身，也有可能返回的是代理对象（AOP），
+为此Spring通过策略模式来支持不同的功能场景，即实现SmartInstantiationAwareBeanPostProcessor接口。如果只采用二级缓存，
+所有的bean完成实例化后需要去循环所有的BeanPostProcessor来调用具体的实现，问题是循环依赖不是每个bean都存在这个问题。
+为了减少不必要的调用，采用了三级缓存，通过三级缓存来保存对应的函数接口对象，当发生循环依赖的时候才去循环调用具体
+的SmartInstantiationAwareBeanPostProcessor实现，拿到实例化对象后再把结果丢到二级缓存。

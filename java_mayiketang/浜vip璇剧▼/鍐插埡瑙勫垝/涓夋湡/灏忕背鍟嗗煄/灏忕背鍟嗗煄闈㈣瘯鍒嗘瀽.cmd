@@ -1,0 +1,21 @@
+1.系统架构分为
+    (1)project-parent:
+       父模块，定义各个模块用到组件的版本等信息
+    (2)mall-core:
+       系统常量，业务异常，工具类等（比如DateUtil,JsonUtil），各种枚举等
+    (3)mall-mongo:
+       服务接口需要查询mongodb的方法全部放到这里面
+    (4)mall-api:
+       定义所有的业务接口，只是定义，并没有具体的实现
+    (5)mall-order-service:
+       订单服务
+    (6)mall-user-service：
+       用户，权限服务
+    (7)mall-product-service：
+       产品服务
+    (8)mall-account:
+       认证中心模块，用户的登陆信息，是单点登陆重要的模块
+    (9)mall-web-order:
+       商城前台页面，是客户用到的系统
+    (10)mall-web-mng:
+       后端管理模块，系统管理员使用，用于维护商品，分类等信息

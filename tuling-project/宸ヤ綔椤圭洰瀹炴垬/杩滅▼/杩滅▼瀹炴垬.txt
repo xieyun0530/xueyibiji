@@ -1,0 +1,102 @@
+1.读取druid的连接池参数不到问题（充电宝-其他项目）
+ 因为你type配置的Druid实际项目中使用的是Druid但是druid.max-active读取不到因为默认是使用的是hikari
+目前想要druid.max-active这种配置被读取生效，需要加如下代码
+@Bean
+@Primary
+@ConfigurationProperties(prefix = "spring.datasource")
+public DataSource dataSource() {
+    return new DruidDataSource();
+}
+
+spring:
+  datasource:
+    # 强制指定 Druid 数据源类型（关键）
+    type: com.alibaba.druid.pool.DruidDataSource
+    # MySQL 驱动（8.x 必须用 com.mysql.cj.jdbc.Driver）
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 数据库连接 URL（确保数据库名、端口正确）
+    url: jdbc:mysql://127.0.0.1:3306/area-security?zeroDateTimeBehavior=convertToNull&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&autoReconnect=true&useSSL=false
+    # 数据库账号密码（替换为你的实际值）
+    username: root
+    password: 123456
+    # Druid 连接池配置（缩进必须和 url 同级）
+    druid:
+      # 核心连接池参数
+      max-active: 200        # 最大活跃连接数
+      initial-size: 20       # 初始化连接数
+      min-idle: 20           # 最小空闲连接数
+      max-wait: 30000        # 获取连接最大等待时间（毫秒）
+      timeBetweenEvictionRunsMillis: 60000  # 空闲连接检测间隔
+      # Web 监控配置（可选，如需访问监控页面则保留）
+      web-stat-filter:
+        enabled: true
+        url-pattern: /*
+        exclusions: "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*"
+      stat-view-servlet:
+        enabled: true
+        url-pattern: /druid/*
+        reset-enable: false
+        login-username: rh
+        login-password: rh
+        allow: 127.0.0.1
+
+使用hikari则直接配置如下配置即可
+spring:
+  # 数据源核心配置
+  datasource:
+    # Hikari 是默认类型，可省略该配置，显式声明更清晰
+    type: com.zaxxer.hikari.HikariDataSource
+    # MySQL 驱动（8.x 必须用 com.mysql.cj.jdbc.Driver）
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 数据库连接 URL（添加必要参数适配 Hikari）
+    url: jdbc:mysql://127.0.0.1:3306/area-security?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    # 数据库账号密码
+    username: root
+    password: 123456
+    # Hikari 连接池专属配置（核心）
+    hikari:
+      # 连接池名称（便于监控）
+      pool-name: AreaSecurity-HikariCP
+      # 核心连接池大小（推荐：CPU核心数 * 2 + 1，如8核CPU设为17）
+      maximum-pool-size: 20
+      # 最小空闲连接数（Hikari 推荐和 maximum-pool-size 相同，避免频繁创建/销毁连接）
+      minimum-idle: 20
+      # 连接最大存活时间（毫秒，默认1800000=30分钟，推荐不超过数据库超时时间）
+      max-lifetime: 1800000
+      # 连接超时时间（毫秒，默认30000=30秒，建议缩短到5秒）
+      connection-timeout: 5000
+      # 空闲连接超时时间（毫秒，默认600000=10分钟，Hikari 建议设为和 max-lifetime 一致）
+      idle-timeout: 600000
+      # 测试连接是否有效（推荐开启，避免获取失效连接）
+      connection-test-query: SELECT 1
+      # 允许池中空闲连接被自动回收前的最大时间（和 idle-timeout 配合）
+      leak-detection-threshold: 60000
+2.使用poi升级到4.4.0的时候出现dev环境可以但是uat环境出现NoClassDefFoundError: org/apache/poi/ss/usermodel/Cell的问题（鲁班客服）
+    排查思路加日志：
+     URL poiJarUrl = Cell.class.getProtectionDomain().getCodeSource().getLocation();
+     log.info("poiJarUrl：{}",poiJarUrl)
+    发现dev是poi-4.1.1的包，uat则是poi-3.15的包，这是因为uat环境有地方引用了poi-3.15包，jvm进行类加载的时候优先加载了低版本的包
+    原因：
+        这个是一个war包，uat再发布的时候是直接解压war包到webapps目录下的，而因为解压前是已经存在之前旧版本的war包对应的目录的，所以覆盖的时候
+        没办法把旧目录下的poi-3.15删除导致的，因此需要调整发布解压前先清空旧目录再进行解压；
+    总结：这里需要搞清楚tomcat发布的流程是先把打包成war放入到webapps下，启动的时候会把这个war包解压到webapps目录下，
+        发布流程时需要先清理旧的目录再放入war包后启动tomcat
+3.搜索异步线程日志
+    可以直接搜索exception关键字去搜索
+4.catch (Exception e)捕获不到NoSuchMethodError（鲁班客服）
+    NoSuchMethodError属于Error类型，而代码里的catch (Exception e)只能捕获Exception及其子类，抓不到Error
+    // 方法1：捕获Throwable（推荐，覆盖所有异常/错误）
+    catch (Throwable e) {
+        log.error("ExcelAgentServiceThraed.run:", e);
+    }
+    // 方法2：同时捕获Exception和Error
+    catch (Exception e) {
+        log.error("ExcelAgentServiceThraed.run(异常):", e);
+    } catch (Error e) {
+        log.error("ExcelAgentServiceThraed.run(错误):", e);
+        throw e;
+    }
+5.JVM线程数过多问题（充电宝cdb）
+    线上环境sa服务运行8天左右线程数暴涨到2000
+    解决办法：https://blog.csdn.net/weixin_42181142/article/details/156835465?spm=1011.2415.3001.5331
+

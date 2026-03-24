@@ -1,0 +1,143 @@
+1.redo日志的作用
+    为了满足数据库的持久性，也就是事务提交后这个数据一定会被持久化，但是因为我们的数据是经过
+    Buffer Pool缓冲池，也就是经过内存后再刷新到磁盘的，而不是直接刷新到磁盘的，所以会有出现
+    断电后，Buffer Pool的数据还没有刷新到磁盘就断电了，导致数据丢失无法持久化；
+    解决方式：
+    1.使用粗暴的方式
+        (1)刷新一个完整的页面数据，但是这样太浪费了
+            因为innoDB中是以页为单位来进行磁盘IO的；
+        (2)随机IO刷起来很慢
+            一个事务有很多sql，每个slq可能存在不同的页中，每个页可能不相邻；
+    2.使用redo日志做增删改查记录
+        用来记录那个数据变更的页号、页面偏移量、新值的日志记录，把这些记录刷新到磁盘上；
+        如果发生系统崩溃，只需要将日志重新执行一遍就可以了，我们称这种日志叫做重做日志redo；
+        redo日志的优势：
+            1.占用空间小
+                只需要记录存储表空间id、页号、偏移量以及更新的值所需的空间；
+            2.redo日志是顺序IO写入磁盘
+                执行事务的过程中，每条sql都可能产生若干条redo日志，这些日志会按照生产中
+                的顺序写入磁盘，也就是顺序IO；
+2.Mini-Transaction的概念
+    包含一组redo日志，在进行崩溃恢复时这是一组redo日志作为不可分割的一部分；
+3.redo log block和日志缓冲区
+    innodb在系统崩溃时，把Mini-Transaction生成的redo日志都放到了大小512字节的块(Block)中；
+    在服务启动的时候会去申请redo log buffer(redo日志缓冲区)的连续空间的内存，可以通过
+    参数innodb_log_buffer_size来设置大小，默认16M；
+4.redo日志的刷盘时机
+    (1)log Buffer空间不足时，当redo日志占log Buffer总容量的一半左右时，就会刷新到磁盘中；
+    (2)事务提交时；
+    (3)后台有一个线程，大于一秒刷新一次log Buffer中的redo日志到磁盘；
+    (4)正常关闭服务器时；
+5.redo日志文件组
+    默认情况下有两个文件ib_logfile0和ib_logfile1，写入时回从ib_logfile0写到ib_logfileN个
+    如果写满了则又从ib_logfile0开始循环写；
+6.redo日志文件格式
+    log buffer是一个连续的内存空间，被划分成若干个512字节大小的block；
+    redo日志文件组文件大小都一样，是由512字节大小的block组成；
+7.Log Sequence Number
+    用来表示每条写入的redo日志序列号，成为日志序列号，简称LSN，规定初始的lsn值为8074；
+    lsn是表示当前系统中写入的redo日志量，会随着redo日志增大而增大；
+8.flushed_to_disk_lsn
+    刷新到磁盘中的redo日志量的全局变量，称之为 flushed_to_disk_lsn，也就是表示
+    redo日志刷新到磁盘的最新序列号，当所有的redo日志都刷新到磁盘时，flushed_to_disk_lsn与lsn相同；
+9.innodb_flush_log_at_trx_commit 的用法
+    这个值表示redo日志刷新到磁盘的时机；
+    0：表示事物提交时redo日志不会立即刷新到磁盘，这个任务交给后台的线程去做；
+    1：表示事物提交时，会将redo日志刷新到磁盘，这个是默认值；
+    2：表示事物提交时，会将redo日志刷新到操作系统的缓冲区，但并不需要刷新到磁盘；
+10.崩溃后的恢复
+    (1)恢复机制
+        通过lsn来确定起点和终点，以哈希表的形式，将同一个页面的redo日志放到同一个哈希槽中，
+        这样遍历恢复的时候可以一次性将同一个页面的数据进行恢复；
+    (2)崩溃后的恢复为什么不用binlog
+        1、两者的使用方式不一样
+            binlog会记录表的所有操作，主要用于人工恢复；
+            而redo log对我们是不可见的，用于事务提交后MySql崩溃后，仍然可以保证数据的持久性；
+        2、redo log是InnoDB引擎特有的，binlog是MySql的Server层实现的，所有引擎都可以使用；
+        3、redo log是物理日志，记录的是在某个表空间某个页上做了什么修改；binlog是逻辑日志，
+            记录的是原始逻辑，比例给id的这个字段加1；
+        4.redo是“循环写”的日志文件，redo log只会记录未刷盘的日志，如果已经刷盘的会从这个
+            有限的redo log中删除掉，binlog是追加日志，全量保存；
+        5.最重要的，当数据库宕机重启后，binlog没有一个日志让innoDB判断哪些已经写入磁盘，
+            哪些没有吸入磁盘；而redo log不一样，只要刷入磁盘的数据，都会从redo log中抹掉，
+            数据库重启后，只需要直接将redo log中的数据进行回复就可以了；
+11.undo日志
+    为了回滚而记录增删改这些记录称之为撤销日志undo；查询是不需要做undo日志的；
+12.INSERT 操作对应的 undo 日志
+    undo日志记录新增数据的主键值就可了；
+13.DELETE 操作对应的 undo 日志
+    阶段一先将delete_mask 值被设置为 1，阶段二会有专门的线程将其删除，删除就是会把该记录
+    从正常链中移除，加入到垃圾链中；
+14.UPDATE 操作对应的 undo 日志
+    1、不更新主键的情况
+        就地更新（in-place update）：
+            更新前后的列大小占用一致；
+        先删除掉旧记录，再插入新记录：
+            更新前后列大小占用不一致；这里删除不是delete mark操作，而是真正删除掉，直接加入到垃圾链表；
+    2、更新主键的情况
+        将旧记录进行delete mark操作：
+            就是将记录只做delete mark，而不是上面的加入到垃圾链表；
+            再创建一条新记录；
+15.FIL_PAGE_UNDO_LOG 页面
+    页类型，FIL_PAGE_UNDO_LOG类型的页面是专门用来存储undo日志的；
+16.MVCC
+    多版本并发控制，主要是为了提升数据库的并发性能；
+    (1)ReadView
+        ReadView中4个比较重要的内容：
+            1、m_ids：表示在生成 ReadView 时当前系统中活跃的读写事务的事务 id 列表。
+            2、min_trx_id：表示在生成 ReadView 时当前系统中活跃的读写事务中最小的事 务 id，也就是 m_ids 中的最小值。
+            3.max_trx_id：表示生成 ReadView 时系统中应该分配给下一个事务的 id 值。 注意 max_trx_id 并不是 m_ids 中
+                的最大值，事务 id 是递增分配的。比方说现在 有 id 为 1，2，3 这三个事务，之后 id 为 3 的事务提交了。
+                那么一个新的读事务 在生成 ReadView 时，m_ids 就包括 1 和 2，min_trx_id 的值就是 1，max_trx_id 的值就是 4。
+            4.creator_trx_id：表示生成该 ReadView 的事务的事务 id。
+        在访问记录时按照下面的步骤判断记录对那个版本可见：
+            1、如果被访问版本的 trx_id 属性值与 ReadView 中的 creator_trx_id 值相同，意味着当前事务在访问它自己
+                修改过的记录，所以该版本可以被当前事务访问。
+            2、如果被访问版本的 trx_id 属性值小于 ReadView 中的 min_trx_id 值，表明 生成该版本的事务在当前事务
+                生成 ReadView 前已经提交，所以该版本可以被当 前事务访问。
+            3、如果被访问版本的 trx_id 属性值大于或等于 ReadView 中的 max_trx_id 值，表明生成该版本的事务在当前
+                事务生成 ReadView 后才开启，所以该版本不 可以被当前事务访问。
+            4、如果被访问版本的 trx_id 属性值在 ReadView 的 min_trx_id 和 max_trx_id 之间
+                (min_trx_id < trx_id < max_trx_id)，那就需要判断一下 trx_id 属性值是不是在 m_ids 列表中，
+                如果在，说明创建 ReadView 时生成该版本的事务还是活跃的， 该版本不可以被访问；如果不在，
+                说明创建 ReadView 时生成该版本的事务已经 被提交，该版本可以被访问。
+            5、如果某个版本的数据对当前事务不可见的话，那就顺着版本链找到下一 个版本的数据，继续按照上边的步骤
+                判断可见性，依此类推，直到版本链中的最 后一个版本。如果最后一个版本也不可见的话，那么就意味着
+                    该条记录对该事务 完全不可见，查询结果就不包含该记录。
+            在MySQL中，READ COMMITTED和REPEATABLE READ 隔离级别的的一个非常大的区别就是它们生成 ReadView 的时机不同。
+    (2)READ COMMITTED —— 每次读取数据前都生成一个ReadView
+    (3)REPEATABLE READ —— 在第一次读取数据时生成一个ReadView
+    (5)MVCC是基本解决了幻读问题，特定情况下是没有解决幻读的，比例下面的列子
+        CREATE TABLE teacher (
+            number INT,
+            name VARCHAR(100),
+            domain varchar(100),
+            PRIMARY KEY (number) )Engine=InnoDB CHARSET=utf8;
+        INSERT INTO teacher VALUES(1, 'Jack', '源码系列');
+        INSERT INTO teacher VALUES(3, 'Mark', '并发编程');
+        INSERT INTO teacher VALUES(9, 'James', 'Redis');
+        INSERT INTO teacher VALUES(15, 'king', 'JVM');
+        INSERT INTO teacher VALUES(21, 'DaFei', 'MySQL');
+        事务T1：
+        begin;
+        #这条数据不存在
+        select * from teacher where number = 30;
+        #执行完事务T2且提交事务后再执行下面的修改和查询语句
+        update teacher set domain='RabbitMQ' where number=30;
+        #这个时候能查询出number=30的数据，出现了幻读，因为number=30的数据在上面update时trx_id事务id就变成了T1的事务id了
+        select * from teacher where number = 30;
+        commit;
+
+        事务T2：
+        begin;
+        insert into teacher values(30,'Luffy','ELK');
+        commit;
+        总结：
+            ReadView并不能阻止T1执行UPDATE或者DELETE语句来改动这个新插入的记录（由于T2已经提交，因此改动该记录并不会造成阻塞)，
+        但是这样一来，这条新记录的trx_id隐藏列的值就变成了T1的事务id。之后T1再使用普通的SELECT语句去查询这条记录时就
+        可以看到这条记录了，也就可以把这条记录返 回给客户端。因为这个特殊现象的存在，我们也可以认为MVCC并不能完全禁止幻读。
+
+
+
+
+

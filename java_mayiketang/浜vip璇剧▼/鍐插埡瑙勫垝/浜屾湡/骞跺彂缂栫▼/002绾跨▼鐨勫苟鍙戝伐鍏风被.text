@@ -1,0 +1,77 @@
+1.fork-join
+    分而治之：将一个难以直接解决的大问题，分割成一些规模较小的相同问题，以便各个击破，分而治之
+    分而治之算法：快速排序、归并排序、二分查找
+    十大计算机经典算法：快速排序、堆排序、归并排序、二分查找、线性查找、 深度优先、广度优先、
+                       Dijkstra、动态规划、朴素贝叶斯分类，有几个属于分而治之？
+        3 个，快速排序、归并排序、二分查找，还有大数据中 M/R 都是。
+2.归并排序
+    (1)将一个数组分割成两个数组，分别是左边数组和右边数组
+    (2)使用递归先将左边的数组分割到最小单元数组后，将每个单元的最小数组进行排序
+    (3)将已经排好序的数组依次进行两两合并，最后合并到一个已经排好序的左边数组
+    (4)使用同样的方法将右边数组也进行排好序后，得到左边和右边都排好序的数组
+    (5)将左边和右边已经排好序的数据进行合并成最终的结果
+3.fork-join原理
+    将一个大任务，拆分(fork)成若干个小任务(拆到不可拆分)，再将一个个小任务运算的结果进行join汇总
+4.工作密取
+   当前线程的task已经全部执行完毕后，则自动取到其他线程的task池中取出task继续执行
+5.fork-join实战
+    我们在使用forkJoin框架时，必须创建一个forkJoin任务，他提供在任务中执行for和join的操作机制，
+    通常我们不直接继承forkJoinTask类，只需要直接继承其子类：
+    1.RecursiveAction,只用于没有返回结果的任务
+    2.RecursiveTask，用于有返回值的任务
+    task要通过forkJoinPool来执行，使用submit或者invoke提供，两者的区别：invoke是同步执行，调用
+    完之后需要等待任务完成，才能执行后面的代码；submit是异步。
+6.compute方法
+    在实现compute方法里，首先需要判断任务是否足够小，如果足够小就直接执行任务；如果不足够小，就必须
+    分割成两个子任务，每个子任务在调用invokeAll方法时，又会进入compute方法，看看子任务是否需要继续
+    分割成孙任务，如果不需要分割，则执行当前的子任务返回结果；使用join方法会等待子任务执行完并得到
+    其结果
+7.CountDownLatch(闭锁)
+    设置一个计数器，在每个线程的任务中可以去递减(可以递减任意值，每个线程也可以递减多次)，
+    递减到零以后调用了CountDownLatch中的wait方法的线程，后面的代码才会执行
+8.使用wait和notifyAll实现数据库连接池的等待超时模式
+
+
+
+9.CyclicBarrier(可循环的屏障)
+    CyclicBarrier字面意思是可循环(Cyclic)的屏障(Barrier)：它的意思就是让一组线程到达一个屏障点，直到
+    最后一个线程到达屏障时，屏障才会打开，所有被屏障拦截的线程才能继续执行。
+    它的默认构造方法是CyclicBarrier(int parties)，参数表示屏障拦截的线程数，每个线程调用await方法告诉
+    CyclicBarrier我已经到达了屏障，然后当前线程被阻塞。
+    它还有提供了一个更加高级的构造函数CyclicBarrier(int parties,Runnable barrierAction),用于当所有线程
+    到达屏障时，优先执行barrierAction，方便处理更加复杂的业务场景。
+    CyclicBarrier可以用于多线程计算数据，最后合并结果的计算
+10.CountDownLatch和CyclicBarrier的区别
+    CountDownLatch的计数器只能使用一次，而CyclicBarrier的计数器可以使用多次。
+    CountDownLatch.await一般阻塞线程工作线程，所有的进行预备的线程执行countDown递减到零后，被阻塞的
+    工作线程会被唤醒继续执行后面的代码；而CyclicBarrier调用await进行阻塞，直到所有线程调用await到达屏障，
+    然后大家再一起执行后面的代码。
+    CyclicBarrier还提供了一个barrierAction，来合并多个线程的结果。
+11.Semaphore(信号量)
+    Semaphore(信号量)是用来控制同时访问资源的线程数，通过协调个个线程，来保证合理的使用公共资源。
+    应用场景：用于做限流控制，比如数据库连接池，用来控制连接数据库的连接数。
+    Semaphore得构造方法Semaphore(int permits)，表示可用的信号量，也就是限流的个数。
+    Semaphore的用法：
+            acquire()方法-------获取一个线程，也就是获取许可证
+            release()方法-------归还许可正
+    Semaphore的注意事项：
+        当使用semaphore初始化信号量后，可以使用release归还多余初始化的那个信号量，所有在使用的时候，
+        可以定义一个归还的Semaphore归还信号池，来避免多次去归还的问题。
+12.Exchange(交换者)
+    Exchange用于进行线程之间的交换，但是最多也就只能支持两个线程之间的数据交换。
+    如果第一个线程调用了exchange方法，它会一直等待第二个线程到达同步点后，进行数据交换，将本线程产生
+    的数据传递给对方。
+13.Callable、Future、FutureTask
+    Callable：它是一个接口，里面只声明了一个方法叫做call()，这是一个泛型接口，call函数返回的类型就是
+               这个传进来的V类型。
+    Future：这个就是具体的Runnable和Callable任务执行结果进行取消、查询是否完成、获取结果。可以使用get
+            方法获取执行结果，该方法会阻塞直到任务完成后返回结果。
+    FutureTask：因为Future是一个接口，所以无法创建对象使用，因此就有了FutureTask。
+                FutureTask类实现了RunnableFuture接口，RunnableFuture继承了Runnable和Future接口；
+                所以它既可以作为Runnable被线程执行又可以作为Future得到Callable的返回值。
+
+
+
+
+
+

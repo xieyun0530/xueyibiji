@@ -1,0 +1,142 @@
+1.什么是进程和线程？
+    进程：进程是系统资源分配的最小单位，资源包括：CPU、内存空间、磁盘IO等
+    线程：线程是CUP调度的最小单位，必须依赖进程而存在
+    总结：进程与进程之间的独立的，不能共享资源；而同一个进程中不同的线程能共享同一个进程的资源
+    jdk中的线程是协助式的
+2.并行与并发
+    并行：可以同时支持多个线程同时运行
+    并发：多个线程轮流执行
+    两者的区别：一个是交替执行，一个是同时执行
+3.高并发的意义
+    可以是代码模块化、异步化、简单化
+4.线程有几种启动方式？
+    thread类源码中说的两种
+    Thread：继承Thread类，然后调用.start()方法
+    Runnable：实现Runnable接口，然后交给创建Thread交给Thread对象运行
+5.Thread和Runnable的区别？
+    thread：java里对线程的唯一抽象；
+    Runnable：对任务(业务逻辑)的抽象
+6.java里怎样安全停止线程？
+    （1）suspend()暂停、resume()恢复、stop()停止，这些Api不建议使用
+        suspend()调用后不会释放资源，比如锁站着锁资源进入睡眠状态，这样容易引发死锁问题
+        resume()
+        stop() 强制停止线程，可能会导致资源无法释放，比如关闭流等
+    （2）interrupt()、isInterrupted()、static方法interrupted()
+        interrupt() 设置标志位，将中断标志位设置位true，一般true表示中断，false表示不中断；发起中断
+        isInterrupted() 检查标志位的状态是true还是false，使用sleep、wait等阻塞方法的时候会抛出中断异常，
+            也就是会检测中断标志位
+        static方法interrupted() 检查标志位的状态是true还是false，但是会将中断标志位置为false
+    （3）中断异常：如果一个线程处于阻塞状态（调用了Thread.sleep()、Thread.join()、Thread.wait()阻塞方法等），
+              线程检查中断表示位为true的话，则会在这个阻塞方法中抛出InterruptedException异常，并且会在
+              抛出异常以后，将中断标识位置为false
+    （4）为什么不建议使用自定义标识位？
+            因为当调用阻塞类的方法时，不会去检查中断标识
+7.run()和start()的区别
+    start()：当new Thread()时其实只是new出了一个Thread实例，还没有真正的将线程挂起来等待CPU调度，只有
+            执行了star()方法侯，才真正意思上的启动了线程；启动后等待CPU分配，分配到CUP后才会执行run()
+            方法，start()方法不能重新调用，重复调用会抛出异常。
+    run()：run方法时执行业务逻辑的地方，和类的任意一个成员方法一致，可以重复执行，也可以单独调用
+8.了解yield、join()方法、sleep方法
+    yield()方法：使当前线程让出CPU占有权，但是时间不可以设定，也不会释放资源。不是每个线程都需要这个锁，
+                而执行yield的线程不一定会持有锁，我们完全可以在释放锁后调用yield方法。
+                所有执行yield方法的线程进入就绪状态后，有可能会被操作系统选中。
+    join()方法：只指将指定的线程加入到当前线程，可以把两个交替执行的线程合并为顺序执行；比如线程B中调用
+                了线程A的join方法，知道B执行A完毕才会执行线程B。（常见的面试考点）
+9.线程的优先级
+    在java线程中，通过一个成员变量priority来控制优先级，优先级范围1~10,在线程中可以通过setPriority(int)
+    方法来修改优先级，默认的优先级是5，优先级越高线程分配的时间片越多
+    正对频繁阻塞（休眠或者I/O操作）的线程要设置较高的优先级，而偏重计算（需要较多CPU时间或者运算）的线程
+    设置较低的优先级，确保处理器不会被独占。不同的jvm以及操作系统上，规划会存在差异，甚至有得回忽略。
+10.守护线程Daemon
+    守护线程是系统后台一直在运行的线程，所有的用户线程死亡后就死亡了，比如垃圾回收线程就是一种守护线程
+    可以通过Thread.setDaemon(true)将线程只是为Daemon
+    Daemon线程被用作完成支持工作，但是在java虚拟机退出时Daemon程序总的finally块不一定执行，在Daemon线程中，
+    所有不能依靠finally关闭或者清理资源。
+11.synchronized内置锁
+    用处和用法：同步块、方法、静态方法
+    对象锁：修饰在非静态方法上称为对象锁；多线程调用的是同一个对象的同步方法线程会阻塞，调用的是不同的对象不会阻塞
+    类锁：修饰在静态方法上成为类锁；类锁和对象锁同时存在时，多线程访问时不会阻塞，因为他们不是一个锁。
+
+
+static方法interrupted()存在的意义
+    jdk有它的存在意思
+resume()为什么不推荐使用
+
+
+
+
+
+
+1.使用Integer变量进行加锁，会出现线程安全问题吗？
+    当Integer变量进行++操作的时，源码中会使用Integer.valueOf()方法，进入这个方法的源码中发现，
+    这个方法会new Integer()也就是创建了一个新的对象，所有每次++的时候是一个新的对象，这样加锁
+    的话就不是同一个对象
+2.volatile关键字
+    只保证变量的可见性，不保证原子性
+    最适合的场景：一个线程写，多个线程读
+3.ThreadLocal辩解
+    ThreadLocal：为每个线程创建一个变量的副本，使得每个线程在某一时刻访问的不是同一个变量，隔离
+                 了多个线程对数据的共享
+    使用场景：在spring的事务中就使用了ThreadLocal来为每个线程绑定一个数据库连接，这样每个线程的
+             数据库连接都是相互独立的，当一个线程中要执行多次数据库操作的时候，只需绑定的这个线程
+             的ThreadLocal中拿就行了，而不需要每次访问数据库都去创一个连接对象
+4.ThreadLocal的使用
+    void set(Object value)：设置当前线程的局部变量
+    Object get()：返回当前线程的局部变量
+    void remove()：将当前的局部变量删除，为了减少内存的占用，防止内存泄漏
+    protected Object initialValue()：返回线程局部变量的初始值，为了让子类覆盖而设计，是一个延迟方法，
+                                    在线程第一次get()或者set(Object)才执行，并且只执行一次，
+                                    在ThreadLocal中缺省实现直接返回一个null
+5.ThreadLocal的内部实现
+    内部定义了一个ThreadLocalMap的静态内部类，这个内部类中又是一个静态内部类Entry，这个Entry类似于
+    map的key，value结构，key就是ThreadLocal，value就是需要隔离访问的变量，这个Entry在ThreadLocalMap类中
+    定义成了一个数组，用数组保存了Entry，因为有多个变量需要线程隔离访问。
+6.引发泄漏的分析
+    强引用：new Object这类操作都是强引用，只要强引用还存在，垃圾回收机制永远不会回收掉被引用的对象实例
+    软引用：垃圾回收工作时如果内存够了，就不会回收，如果内存不够才会回收。在jdk1.2之后，提供了SoftReference类来现实软引用
+    弱引用：无论内存是否足够都会回收掉被弱引用关联的对象实例，在jdk1.2之后，提供了weakReference类来实现弱引用
+    虚引用：最弱的引用，唯一的目的是能够在这个对象实例被垃圾回收器回收时收到一个通知，jdk1.2之后，提供PhantomReference类
+            来实现虚引用，幽灵引用，最弱（随时会被回收掉）垃圾回收的时候收到一个通知，就是为了监控垃圾回收器是否正常工作。
+7.内存泄漏现象
+    ThreadLocal：根据分析ThreadLocal维护了一个ThreadLocalMap,这个映射表的key是ThreadLocal实例本身，value是真正需要存储
+                的Object,也就是说ThreadLocal本身不是存储值，它只是作为一个key来让线程从ThreadLocalMap获取value。
+                但是这个map是使用ThreadLocal的弱引用作为key的，弱引用在GC时会被回收。
+    ThreadLocal所在的栈调用链：ThreadLocalRef(栈对象地址) -> ThreadLocal(堆实例) -> ThreadLocalMap(堆实例) -> Entry -> key
+    ThreadLocal中的变量栈调用链：CurrentThread Ref(栈对象地址) -> Thread(堆实例) -> ThreadLocalMap(堆实例) -> Entry -> value，
+    根据调用链分析：当把ThreadLocal变量置为null以后，没有任何强引用指向threadLocal实例，threadLocal就会被gc回收；这样以来
+                    key就会被gc回收变成null，因为key是弱引用；这时候就会出现没有key的Entry，就没有办法访问这些key为null的
+                    Entry中的value，这样value就会存在一条强引用链（ThreadLocal中的变量栈调用链）：这块value永远不会被访问到，
+                    所有存在内存泄漏。
+                    只有当thread线程结束以后，CurrentThread不会存在栈中，强引用断开，最终这个Entry中的value才会被GC回收;
+                    所以在使用ThreadLocal变量后，都调用下remove()方法，清除数据
+    expungeStaleEntry：在ThreadLocal源码中，无论是get()、set()在某些时候，调用了expungeStaleEntry方法来清除Entry中的key为null
+                       的value，但是这是不及时的，不是每一次都能执行到，所以在某些情况下会发生内存泄漏的问题，只有调用了remove()
+                       方法中显示的调用了epungeStaleEntry方法
+8.ThreadLocalMap中的Entry中的key为什么要使用弱引用？
+    key使用强引用：引用的ThreadLocal的对象被回收，但是ThreadLocalMap还是持有ThreadLocal的强引用，如果没有手动key删除，
+                      ThreadLocal的对象实例不会被回收，导致Entry泄漏
+    key使用弱引用：引用的ThreadLocal的对象被回收，由于ThreadLocalMap持有ThreadLocal的弱引用，即使没有手动删除key，
+                  ThreadLocal对象的实例也会被回收；value在下一次ThreadLocalMap调用set，get，remove都有机会被回收
+    比较：由于ThreadLocalMap的生命周期与Thread一样长，如果没有手动删除对应的key，就会导致内存泄漏，但是使用弱引用可以多一层保障
+    ThreadLocal内存泄漏的根源是：由于ThreadLocalMap的生命周期跟Thread一样长，如果没有手动删除对应的key就会导致内存泄漏，
+                                而不是因为弱引用。
+9.总结
+    jvm利用设置ThreadLocalMap的可以为弱引用，来避免内存泄漏
+    jvm利用调用remove、get、set方法的时候，删除value来回收内存
+10.错误的使用ThreadLocal导致线程不安全
+    当ThreadLocal的值value是一个静态变量的时候，这个时候所有的副本都是引用的同一个引用对象，也就是value都是同一个对象实例，
+    这样就产生了线程安全问题
+11.线程之间的协作，等待通知
+    wait：等待，调用后会释放对象的锁
+    notify：唤醒一个线程，不会释放对象的锁
+    notifyAll：唤醒所有线程，不会释放对象的锁
+    总结：wait、notify、notifyAll只能在synchronized同步块中调用；
+          在调用 wait（）、notify()系列方法之前，线程必须要获得该对象的对象级别锁，
+          即只能在同步方法或同步块中调用 wait（）方法、notify()系列方法
+    尽可能使用notifyAll，因为我们无法保证唤醒的这个线程是我们所需要的
+12.ThreadLocalMap中的Entry中的value不使用弱引用
+    因为value指向的唯一实例就是Entry,如果是弱引用的话，每次垃圾回收value都会被回收掉
+13.面试题，调用yield、sleep()、wait()、notify等方法对锁有和影响？
+    yield、sleep()被调用后，都不会释放当前线程锁持有的锁。
+    调用wait()方法后，会释放当前线程持有的锁，而且当前被唤醒后，会重新竞争锁，锁竞争到后才会执行wait方法后面的代码
+    调用notify系列方法后，对锁无影响，所有一般会吧notify放到syn同步代码的最后一行

@@ -1,0 +1,402 @@
+1.MySql性能调优
+    (1)硬件和OS调优
+        是否什么磁盘存储，是否使用裸设备等等；
+    (2)MySql调优
+        确定业务表结构设计是否合理，sql语句的优化是否足够，该添加的索引是否添加了，该剔除的索引是否剔除；
+    (3)架构调优
+        采用数据仓库、搜索引擎、缓存，考虑写的并发量多大，做分布式，读的压力多大，做读写分离；
+        作为金融类的应用，需要额外考虑数据安全因数，数据是否允许丢失；
+2.什么是慢查询
+    是指mysql记录所执行超过long_query_time参数设定的时间阈值的SQL语句的日志；默认情况下慢查询日志是关闭的；
+3.慢查询基础-优化数据访问
+    查询性能低下大多数情况下是因为访问的数据太多，对于低效的查询可以从下面两个方面分析：
+        1.确认应用程序是否检索大量超过需要的数据，通常是因为访问了太多的行或者太多的列；
+        2.确认mysql服务器层是否在分析大量超过需要的数据行；
+4.请求不要的数据
+    1.查询出所有数据，然后只选取后几条数据，可以使用limit解决；
+    2.使用select *查询出所有列，只需要查询用到的列；
+    3.重复查询的数据，使用缓存将它缓存起来；
+5.是否在扫描额外的记录
+    响应时间、扫描的行数、返回的行数；
+    一般MySQL能够使用如下三种方式应用WHERE条件：
+        1.在索引中使用WHERE条件来过滤不匹配的记录。这是在存储引擎层完成的；
+        2.使用覆盖索引扫描（在Extra列中出现了Using index），不要进行回表；
+        3.从数据表中过滤不满足的条件记录（在Extra列中出现Using Where)，这是从mysql服务器完成的，
+            需要先读取数据再过滤，因此需要回表；
+    好的索引可以让查询使用适合的访问类型，尽可能的只扫描所需要的的数据行，如果发现扫描大量的数据而只返回
+    少量的行，通常可以使用一下方面优化它：
+        1.使用覆盖索引；
+        2.该表表结构，比如汇总表；
+        3.重写这个复杂的查询，让mysql优化器能够以更优的方式执行这个查询；
+6.重构查询的方式
+    1.一个复杂查询还是多个简单查询
+        将一个复杂的查询，分成多个简单的查询；
+    2.切分查询
+        将一个大数据查询，拆分成多个小数据查询；
+    3.分解关联查询
+        将多个关联表查询拆分成单表查询，可以把常用的少量不怎么修改成的数据使用缓存缓存起来；
+    4.慢查询日志分析
+        (1)查询慢查询日志是否开启命令
+            show VARIABLES like 'slow_query_log';
+        (2)开启慢查询日志
+            set GLOBAL slow_query_log=1;
+        (3)查询慢查询时间阈值（多慢算慢，mysql中可以设置一个阈值，默认值为10，代表10秒）
+            show VARIABLES like '%long_query_time%';
+        (4)设置慢查询阈值
+            set global long_query_time=0; ---默认10秒，这里为了演示方便设置为0
+7.explain关键字
+    1.执行计划参数详情
+        id： 在一个大的查询语句中每个 SELECT 关键字都对应一个唯一的 id
+        select_type： SELECT 关键字对应的那个查询的类型 table：表名
+        partitions：匹配的分区信息
+        type：针对单表的访问方法
+        possible_keys：可能用到的索引
+        key：实际上使用的索引
+        key_len：实际使用到的索引长度
+        ref：当使用索引列等值查询时，与索引列进行等值匹配的对象信息
+        rows：预估的需要读取的记录条数
+        filtered：某个表经过搜索条件过滤后剩余记录条数的百分比
+        Extra：—些额外的信息
+    2.id
+        一条sql语句中有几个select关键字就有几个不相同的id号；
+        比如：
+            1、查询中包含子查询的情况 比如下边这个查询语句中就包含2个SELECT关键字:
+                SELECT* FROM s1 WHERE id IN ( SELECT * FROM s2);
+            2、查询中包含 UNION 语句的情况 比如下边这个查询语句中也包含2个SELECT关键字:
+                SELECT * FROM s1 UNION SELECT * FROM s2 ;
+            查询语句中每出现一个SELECT关键字，MySQL 就会为它分配一个唯一的id值。这个id值就是EXPLAIN语句的第一个列。
+        单select关键字：
+            EXPLAIN SELECT * FROM s1 WHERE order_no = 'a';
+            这个查询中只有一个select关键字，所以explain的结果中只有一条id列为1条记录；
+        连接查询：
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2;
+            一个from关键字后面可以跟随多个表，每个表都会有一条记录，但是他们的id都相同；
+        包含子查询：
+            EXPLAIN SELECT * FROM s1 WHERE id IN (SELECT id FROM s2) OR order_no = 'a';
+            对于有子查询的sql来说，有多个select就会对应不同的id；
+            这里注意:
+                查询优化器可能对设计的子查询语句进行重写，转换成连接查询，查看是否重写，直接查看执行计划
+                    EXPLAIN SELECT * FROM s1 WHERE id IN (SELECT id FROM s2 WHERE order_no = 'a');
+                虽然是一个子查询，但是两个select的id都相同，这就是将子查询转换为了连接查询；
+        包含UNION字句
+                EXPLAIN SELECT * FROM s1 UNION SELECT * FROM s2;
+            这里会有三条explain记录，因为union会把多个查询的结果集合并起来并对结果集进行去重；
+            id为NULL表明这个临时表是为了合并两个查询的结果集而创建的；
+                EXPLAIN SELECT * FROM s1 UNION ALL SELECT * FROM s2;
+            跟union比起来，union all是不需要为最终结果集去重的，所以就不会使用临时表；
+    2.select_type类型
+        SIMPLE：简单的select查询,不使用union及子查询
+        PRIMARY：最外层的select查询
+        UNION：UNION中的第二个或随后的select查询,不依赖于外部查询的结果集
+        UNION RESULT：UNION 结果集
+        SUBQUERY：子查询中的第一个select查询,不依赖于外部查询的结果集
+        DEPENDENT UNION：UNION 中的第二个或随后的select查询,依赖于外部查询的结果集
+        DEPENDENT SUBQUERY：子查询中的第一个 select 查询,依赖于外部查询的结果集
+        DERIVED： 用于from子句里有子查询的情况。MySQL会递归执行这些子查询, 把结果放在临时表里。
+        MATERIALIZED：物化子查询
+        UNCACHEABLE SUBQUERY：结果集不能被缓存的子查询,必须重新为外层查询的每一行进行评估，出现极少。
+        UNCACHEABLE UNION：UNION中的第二个或随后的select查询,属于不可缓存的子查询，出现极少
+        (1)SIMPLE
+            EXPLAIN SELECT * FROM s1 WHERE order_no = 'a';
+            简单的select查询，查询中不包含union；
+            连接查询也算是 SIMPLE 类型
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2;
+        (2)PRIMARY
+            EXPLAIN SELECT * FROM s1 UNION SELECT * FROM s2;
+            对于union和union all或者子查询的大查询来说，由几个小查询组成，其中最左边的那个查询是PRIMARY；
+        (3)UNION
+            其余的查询对于union all来说值都是union;
+        (4)UNION RESULT
+            而对于union来说最后一个合并临时表的值为union result；
+        (5)SUBQUERY
+            EXPLAIN SELECT * FROM s1 WHERE id IN (SELECT id FROM s2) OR order_no = 'a';
+            如果子查询语句不能够转换成semi-join的形式，即该子查询与父表没有关联查询，那么优化器就会采用物化的
+            方式来执行子查询，第一个select的类型为PRIMARY，而子查询则是SUBQUERY(说明子查询被物化)；
+            semi-join：
+                半连接优化技术，把子查询上拉到父查询中，与父表做join操作；对于子查询部分，父表的每个符合条件的元素，
+                都要把子查询查询一遍，如果上拉到父查询中，来减少查询的次数；
+                子查询物化：子查询的结果缓存在内存或临时表中；
+                关联子查询：WHERE子句中依赖与外部查询；
+                非关联子查询：WHERE子句中不依赖外部查询；
+        (6)DEPENDENT UNION、DEPENDENT SUBQUERY
+            EXPLAIN SELECT * FROM s1 WHERE id IN (SELECT id FROM s2 WHERE id = 716 UNION SELECT id FROM s1 WHERE id = 718);
+            在子查询中包含union或者union all时，除了最左边小查询外其余的都是DEPENDENT UNION；
+            从执行计划中可以看出来，SELECT id FROM s2 WHERE id = 716这个小查询由于是子查询中第一个查询，所以它的select_type
+            是DEPENDENT SUBOUERY，而SELECT id FROM s1 WHERE id = 718这个查询的select_type就是DEPENDENT UNION。
+
+            是不是很奇怪这条语句并没有依赖外部的查询？MySQL优化器对IN操作符的优化会将IN中的非关联子查询优化成一个关联子查询。
+            我们可以在执行上面那个执行计划后，马上执行show warnings\G，可以看到MySQL对SQL语句的大致改写情况：
+        (7)DERIVED
+            EXPLAIN SELECT * FROM (SELECT id, count(*) as c FROM s1 GROUP BY id) AS derived_s1 where c >1;
+            第二条的代表子查询的执行方式，第一条外外层查询；
+            table列显示的是<derived2>，表示该查询是针对将派生表物化之后的表进行查询的；
+        (8)MATERIALIZED
+            EXPLAIN SELECT * FROM s1 WHERE order_no IN (SELECT order_no FROM s2);
+            第三条记录的id值为2，从它的select_type值为NATERIALIED可以看出，查询优化器是要把子查询先转换成物化表。
+            要注意的是第二条记录的table列的值是<subquery2>，说明该表其实就是id为2对应的子查询执行之后产生的物化表，
+            然后将s1和该物化表进行连接查询。
+            MySQL把这个将子查询结果集中的记录保存到临时表的过程称之为物化;
+    3.partitions
+        和分区表有关，一般情况下我们的查询语句的执行计划的partitions 列的值都是 NULL。
+    4.type
+        出现比较多的是system>const>eq_ref>ref>range>index>ALL一般来说，得保证查询至少达到range级别，最好能达到ref。
+        (1)system
+            explain select * from test_myisam;
+            当表中只有一条记录并且该表使用的存储引擎的统计数据是精确的，比如MyISAM、Memory，那么对该表的访问方法就是system。
+            如果改成InnoDB存储引擎，就会标称all；innDB的统计数据值是采用估算的不是精确的，而MyISAM是精确的；
+        (2)const
+            当我们根据主键或者唯一二级索引列和常数进行等值匹配时，对单表的访问方法就是const，因为一行只匹配一个；
+            常数其实也就是说在表中只有一个唯一的值；
+            对于唯一二级索引来说，查询该列为NULL值的情况比较特殊，因为唯一二级索引列并不限制NULL值的数量，
+            因为在mysql数据库层面，null值表示唯一的不确定的值，而在索引层面则是表示同一个值；
+            所以上述语句可能访问到多条记录，也就是说is null不可以使用const访问方法来执行，也就是is null是不会使用到const的；
+        (3)eq_ref
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.id = s2.id;
+            驱动表与被驱动表：
+                表s1与s2关联查询，先查询出s2表的信息，然后以s2表的信息为条件循环查询s1表的数据，
+                那么s2就是驱动表，s1就是被驱动表；关注s1的type为eq_ref，表示s1可以通过主键进行等值匹配；
+                而s2的type则是all表示它是个驱动表；
+                这里如果是s1表的数据比s2表多那么就会以s1表作为被驱动表，否则就是以s2表作为被驱动表，小表驱动大表，数据少为驱动表，数据多为被驱动表；
+                总结：驱动表就是all，被驱动表示eq_ref；驱动是查询所有数据，被驱动是等值循环查询数据；
+        (4)ref
+            EXPLAIN SELECT * FROM s1 WHERE order_no = 'a';
+            使用是一个普通的二级索引时匹配的值可能会匹配到多个值，就会使用ref；
+            无论是普通的二级索引，还是唯一的二级索引，它们的索引列包含null值的数量并不限制，所以使用key is null查询
+            最多只能使用到ref访问方法，而不能使用到const的方法访问；
+            如果是一个联合索引，如果where后面的字段不是全部是等值匹配，出现那种<>!=这种，也是不能使用ref方法的；
+            ref_or_null
+                explain SELECT * FROM order_exp_cut WHERE order_no= 'abc' OR order_no IS NULL;
+                表示找个使用order_no这个索引，直接查询两个连续的区间，一个是abc一个是为null的区间，然后再去回表；
+            index_merge
+                EXPLAIN SELECT * FROM s1 WHERE order_no = 'a' OR insert_time = '2021-03-22 18:36:47';
+                一般情况下对于某个表的查询只能使用到一个索引，某些场景使用索引合并，索引order_no，insert_time的联合索引；
+            unique_subquery
+                EXPLAIN SELECT * FROM s1 WHERE id IN (SELECT id FROM s2 where s1.insert_time = s2.insert_time) OR order_no = 'a';
+                在子查询的语句中，优化器决定将查询转换成exists子查询，而且子查询可以使用主键进行等值匹配，类型就是这个；
+            index_subquery
+                EXPLAIN SELECT * FROM s1 WHERE order_no IN (SELECT order_no FROM s2 where s1.insert_time = s2.insert_time) OR order_no = 'a';
+                和unique_subquery相同，只是使用的是普通索引，而不是主键索引；
+        (5)range
+            EXPLAIN SELECT * FROM s1 WHERE order_no IN ('a', 'b', 'c');
+            EXPLAIN SELECT * FROM s1 WHERE order_no > 'a' AND order_no < 'b';
+            在where语句中出现了 between、<、>、in 等的查询；
+        (6)index
+            EXPLAIN SELECT insert_time FROM s1 WHERE expire_time = '2021-03-22 18:36:47';
+            索引`insert_time`, `order_status`, `expire_time`，当可以使用到覆盖索引，但是需要全表扫描时；
+        (7)all
+            EXPLAIN SELECT * FROM s1;
+            全表扫描，需要扫描全表数据；
+    5.possible_keys与key
+        EXPLAIN SELECT order_note FROM s1 WHERE insert_time = '2021-03-22 18:36:47';
+        possible_keys表示可能用到的索引，key表示实际用到的索引（一般情况下where语句只能使用一个二级索引）；
+        使用index访问方法来查询某个表时，可能会出现possible_keys列是空的，而key列展示的是实际使用到的索引，如下：
+        EXPLAIN SELECT insert_time FROM s1 WHERE expire_time = '2021-03-22 18:36:47';
+        possible_keys的列不是越多越好，因为查询优化器计算成本是需要花费更长的时间；
+    6.key_len
+        表示优化器使用索引时，该索引记录的最大长度；
+        计算方式：
+            变长字符类型：varchar(100)字符集是utf8，所占空间：100*3=300字节；
+            如果可以存储null，则需要多一个字节来单独存null；
+            对于变长字段来说，都会有个2个字节的空间来存储变量列的实际长度；
+            Mysql在执行计划中输出key_len列主要是为了我们区分使用列和索引查询具体用了几个索引列，也就是使用复合索引时，
+            根据左前缀的特性，查看复合索引使用了几个列，便于观察复合索引的实际使用情况；
+    7.ref
+        当时使用索引列等值匹配的条件去执行查询时，也就是访问方法是const、 eg_ref、ref、ref_or_null、unique_sutbquery、
+        index_subopery其中之一时，ref列的展示就是与索引列作值匹配的是谁，比如是某个列常数或者是某个列；
+            EXPLAIN SELECT * FROM s1 WHERE order_no = 'a';
+        这条sql的ref列就是const，表明在使用使用order_no列索引时，是与order_no列作为等值匹配的对象常数；
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.id = s2.id;
+        对于这个sql被驱动表的ref列是mysqladv.s2.id，说明这是对被驱动表进行访问时使用到PRIMARY索引；
+        有的时候与索引列进行等值匹配的对象是一个函数，比如
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s2.order_no= UPPER(s1.order_no);
+         查询计划中的ref列⾥输出的是func
+    8.rows
+        EXPLAIN SELECT * FROM s1 WHERE order_no > 'z';
+        查询优化器进行查询时，预计需要扫描的行数；也就是使用order_no索引条件查询，满足order_no条件的记录数；
+    9.filtered
+         EXPLAIN SELECT * FROM s1 WHERE id > 5890 AND order_note = 'a';
+        查询优化器预计有多少条记录满足其余条件的百分比；
+        rows中是满足id条件的条数，那么filtered就是在这个基础上满足order_note条件的百分比；
+        比如filtered等于10，那么就是满足order_note条件的记录数占，满足id条件记录数的百分之10；
+        对于单表查询这个参数没什么意义，只有使用连接查询时才会关注；
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.order_no = s2.order_no WHERE s1.order_note > '你好，李焕英';
+        查看执行计划，s1是驱动表，s2是被驱动表，s1表的rows列为10573，filtered列为33.33，这意味着驱动表s1的扇出
+        值是10573 * 33.33 = 3524.3，也就是被驱动表大约需要查询3524.3次；
+    10.Extra
+        表示额外信息；
+        (1)Using index
+            表示使用了覆盖索引；
+        (2)Using index condition
+            表示虽然出现了索引列，但是却不能使用索引列；
+            SELECT * FROM s1 WHERE order_no > 'z' AND order_no LIKE '%a';
+            虽然order_no > 'z'能使用到索引，但是order_no LIKE '%a'不能使用到索引；
+            以前版本执行步骤：
+                1.先根据order_no> 'z'条件到二级索引中查询满足条件的记录；
+                2.然后根据主键回表到主键索引中查询出select *的记录，再根据记录找出满足order_no LIKE '%a'条件的记录；
+                总结：
+                    从这条sql中可以看出只使用到了order_no索引列，那么我们可以进行改进下；
+            改进后的执行步骤（索引下推，通过减少回表次数来提高数据库的查询效率，一般用于like匹配索引列情况下）：
+                1.先根据order_no> 'z'条件到二级索引中查询满足条件的记录；
+                2.对于找到的二级索引，不着急回表，而是再根据order_no LIKE '%a'条件匹配，
+                    如果不满足这个条件就不回表，减少回表次数，因为回表是一个典型的随机io，比较耗时；
+                3.匹配到满足order_no LIKE '%a'条件的数据，再进行回表查询，以此来减少回表，这种优化叫做索引下推；
+                4.如果查询语句执行过程中要使用索引下推这个条件，在extra列特性中将会显示Using index condition；
+        (3)Using where
+            EXPLAIN SELECT * FROM s1 WHERE order_note = 'a';
+                当使用全表扫描，且使用where语句中order_node没有索引，但是有针对该表搜索条件时；
+            EXPLAIN SELECT * FROM s1 WHERE order_no = 'a' AND order_note = 'a';
+                当where字句中除了索引列order_no还有非索引列order_note查询时，也会出现Using where；
+            注意：出现了Using where，只是表示在server层根据where条件进行了过滤，和是否全表扫描或读取了索引文件没有关系，
+                  网上有不少文章把Using where和是否读取索引进行关联，是不正确的；
+        (4)Using join buffer (Block Nested Loop)
+            EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.order_note = s2.order_note;
+            在连接查询的时候，被驱动表不能使用索引时，mysql一般会分配一块叫join buffer的内存加快速度；
+            对于s1表的执行有两个提示：
+            Using join buffer(Block Nested Loop)：表示s1表不能使用索引，只能退而求次，
+                                                    使用Using join buffer来减少访问s1的次数；
+            Using where：因为查询语句s1.order_note = s2.order_note条件，因为s2是驱动表，s1是被驱动表，
+                        所以访问s1表时s1.order_note的值已经确定下来了，所以实际上查询s1表的条件就是
+                        s1.order_note = 一个常数，所以提示Using where额外信息；
+        (5)Not exists
+            EXPLAIN SELECT * FROM s1 LEFT JOIN s2 ON s1.order_no = s2.order_no WHERE s2.id IS NULL;
+            当使用左外连接时，被驱动表要求某个列允许为null时，就会出现Not exists；
+            上面s1是驱动表，s2是被驱动表，where字句中包含s2.id is null；
+        (6)Using intersect(...)、Using union(...)和 Using sort_union(...)
+            当使用Using union时表示，将sql拆分成两条sql然后进行union；
+        (7)Zero limit
+            当limit等于0时，表示不读取任何记录；
+        (8)Using filesort
+             EXPLAIN SELECT * FROM s1 ORDER BY order_no LIMIT 10;
+             使用了order_no索引列进行排序，索引extra列为null；
+             这个查询语句可以利用idx_order_no索引直接取出order_no列的10条记录，然后再进行回表操作就好了；
+             但是很多情况下是无法使用索引进行排序的，只能使用内存排序(记录较少)，或者磁盘中排序(记录较多)，
+             mysql统一把这种排序叫做文件排序，也就是extra列会出现Using filesort；
+             EXPLAIN SELECT * FROM s1 ORDER BY order_note LIMIT 10;
+             如果查询使用filesort排序的数据过多，就需要想办法使用索引排序，因为文件排序是很耗时的；
+        (9)Using temporary
+            表示查询过程中使用了临时表来完成一些功能，比如去重、排序之类的；
+            比如执行DISTINCT、GROUP BY、UNION 等子句的查询过程中；
+                EXPLAIN SELECT DISTINCT order_note FROM s1;
+            比如
+                EXPLAIN SELECT order_note, COUNT(*) AS amount FROM s1 GROUP BY order_note;
+                上面不仅出现Using temporary，还包含Using filesort，可是我们没有写order by字句；
+                这是因为Mysql会将包含group by字句的查询中默认添加order by字句，等价于如下：
+                EXPLAIN SELECT order_note, COUNT(*) AS amount FROM s1 GROUP BY order_note order by order_note;
+                如果我们不需要排序，需要显示的加上order by null;
+                EXPLAIN SELECT order_note, COUNT(*) AS amount FROM s1 GROUP BY order_note order by null;
+                使用临时表不是一个好的征兆，因为临时表建立和维护需要付出很大的成本，所以需要避免出现临时表；
+                EXPLAIN SELECT order_no, COUNT(*) AS amount FROM s1 GROUP BY order_no;
+                如上使用索引列进行分组来避免使用临时表；
+        (10)Start temporary, End temporary
+            有子查询时，优化器会优先尝试将IN子查询转换成semi-join(半连接优化技术，将子查询拉到父查询中，与父查询做join)
+            semi-join有几种策略：
+                策略DuplicateWeedout时，建立临时表实现外层查询中的记录去重，驱动表查询计划extra列显示Start temporary，
+                被驱动表的extra列显示示End temporary；
+        (11)LooseScan
+            将in查询转换为semi-join时，采用LooseScan执行策略，在extra列中显示LooseScan；
+        (12)FirstMatch(tbl_name)
+            将in查询转换为semi-join时，是 FirstMatch执行策略，在extra列中显示FirstMatch(tbl_name)；
+8.二级索引 + 回表
+    一般情况下只能使用一个二级索引执行查询
+    SELECT * FROM order_exp
+    WHERE insert_time = '2021-03-22 18:34:56' AND order_no> '你好，李焕英。7 排 24 号,过期时长:DD00_24S';
+    查询优化器会识别到这个查询中的两个搜索条件，优化器会根据order_exp表的统计数据来判断到底使用那个条件到对应
+    的二级索引中去查询，选择那个扫描行数较少的条件的索引去查询；
+    查询的步骤：
+        1.根据insert_time索引查询到满足insert_time = '2021-03-22 18:34:56'条件的数据；
+        2.查找到满足insert_time = '2021-03-22 18:34:56'记录的索引后，回表到主键索引中查询到完整数据；
+        3.根据完整数据，再过滤掉不满足order_no> '你好，李焕英。7 排 24 号,过期时长:DD00_24S'的数据；
+        4.最后得到即满足insert_time = '2021-03-22 18:34:56'又满足
+            order_no> '你好，李焕英。7 排 24 号,过期时长:DD00_24S'的数据；
+9.MRR(多范围读取)的优化措施
+    即先读取一部分二级索引记录，将它们的主键值排好序之后再统一执行回表操作，较少IO开销；
+10.高性能的索引使用策略
+    (1)不在索引列上做任何操作
+        不在索引列上进行计算，使用函数；
+    (2)尽量全值匹配
+        这个是对于联合索引来说的；
+    (3)最佳左匹配原则
+        这个对于联合索引来说，假设有联合索引a、b、c来说，是先按照a进行排序，再a相同的情况下，再按照b进行怕排序，
+        然后在b相同的情况下，再按照c进行排序；因此查询的时候where语句中得按照最佳左匹配原则；
+    (4)范围查询条件放最后
+        假设有联合索引a、b、c，如果左边a是范围匹配，则b、c的索引都用不到；
+        a是等值匹配，b是范围匹配，那么c则用不到索引；
+        a是等值匹配。b是等值匹配，那么成能使用到索引；
+        总结：这是因为索引是从左到右，即在左边列相同的情况下再按照右边的列进行排序的；
+    (5)覆盖索引尽量用
+        因为索引是按照值顺序存储的，对于I/O密集型的范围查询会比随机从磁盘读取每一行数据的I/O要少得多；
+    (6)不等于要慎用
+        因为这种情况下的扫描区间是是[第一条记录,'DD00_6S'] 和['DD00_6S',最后一条记录]，加上回表，还不如回表；
+    (7)Null/Not有影响
+        表中字段设置允许为null：
+            is null会走ref类型的索引访问；因为索引会把null值当做同一个值；is not null不能走索引，因为扫描区间是全表；
+        表中字段设置不允许为null：
+            is null能走索引和is not null都不能走索引；
+    (8)like查询要当心
+        like以通配符开头('%abc...')，mysql索引失效会变成全表扫描的操作；
+        可以通过覆盖索引或者将字段进行反转过来存储；
+    (9)字符类型加引号
+        explain SELECT * FROM order_exp WHERE order_no = 6;
+        因为优化器会尝试将order_no字段转换成数字后和6进行比较，所以索引就失效了；
+    (10)使用or关键字时要注意
+        索引列：
+            UNIQUE KEY `u_idx_day_status` (`insert_time`,`order_status`,`expire_time`) USING BTREE,
+            KEY `idx_order_no` (`order_no`) USING BTREE,
+            KEY `idx_expire_time` (`expire_time`) USING BTREE
+        explain SELECT * FROM order_exp WHERE expire_time= '2021-03-22 18:35:09' OR order_no = 'DD00_6S';
+            这个能使用到索引，会进行索引合并，extra会显示索引下推Using index condition；
+        explain SELECT * FROM order_exp WHERE expire_time= '2021-03-22 18:35:09' OR order_note = 'abc';
+            这个会进行全表扫描，因为order_note没有索引；
+    (11)使用索引扫描来做排序和分组
+        只有使用同一个索引即满足查询条件又满足排序，并且列的排序方向一直(正序或倒序)时才能达到；
+    (12)排序当心
+        ASC、DESC 别混用；
+        排序列包含非同一个索引的列，也就是使用两个不同的索引列同时进行排序；
+    (13)尽可能按主键顺序插入行
+    (14)优化count查询
+        可以统计行数，也可以统计某个列的数量；
+        统计列时，不统计null值的列；
+        统计行数是，会统计null值的列；
+    (15)关于null值得特表说明
+        mysql对于null有三种定义：
+            1、所有的null都是不确定的，也就是不一样
+            2、所有的null是相等的，只算一个
+                索引是使用的这个，所以当索引列允许为null时，则会使用ref进行访问；
+            3、所有的null表示无意义的
+                统计列时使用的这个特效，所以不会统计为null的列；
+        innodb_stats_method系统变量有三个值：
+            nulls_equal：相等(默认值)；
+            nulls_unequal：不相等；
+            nulls_ignored：忽略掉；
+    (16)优化limit分页
+        select * from order_exp limit 10000,10;
+        mysql会查询到10010条，然后把前10000条扔掉，返回最后10条；
+        优化：
+            1、SELECT * FROM (select id from order_exp limit 10000,10) b,order_exp a where a.id = b.id;
+                这个效率会高一点，但是不是最佳方案；
+            2、select * from order_exp where id > 67 order by id limit 10;
+                id值需要前端进行业务配合；
+11.记忆口诀
+    全职匹配我最爱，最左前缀要遵守；
+    带头大哥不能死，中间兄弟不能断；
+    索引列上少计算，范围之后全失效；
+    LIKE百分写最右，覆盖索引不写*；
+    不等空值还有 OR，索引影响要注意；
+    VAR引号不可丢，SQL优化有诀窍。
+12.分区表
+    (1)不建议使用mysql分区表
+        1、分区键不灵活，如果不走分区键，会锁表
+        2、一旦数据量上来，分区表进行关联是一个灾难
+        3、自己分库分表可以根据业务场景访问模式进行掌控，mysql不能确定；
+        4、分区表只能在一台机器上分，都是同一台机器，受限制；
+
+
+
+
+
+
+
+
+
+
+

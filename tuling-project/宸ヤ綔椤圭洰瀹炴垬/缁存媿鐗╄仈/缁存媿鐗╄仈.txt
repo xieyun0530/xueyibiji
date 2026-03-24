@@ -1,0 +1,333 @@
+1.浏览器的前端访问后端的https请求接口时出现异常net::ERR_CERT_COMMON_NAME_INVALID
+    是因为证书缺失导致，需要到隐私与安全设置->
+    第三方Cookie：经允许可使用第三方 Cookie 的网站中添加：https://192.168.252.130:8090请求前缀地址
+    如果还是不行再把这个报错的接口复制到url中请求一次，点击允许访问就可以了
+2.idea中如果启动出现springboot想启动找不到active: @profile.name@配置则把这个springboot项目的maven刷新一下就行了789600
+3.The bean 'tenantClient.FeignClientSpecification' could not be registered. A bean with that name has already been defined and overriding is disabled.
+    但是项目中确只有一个tenantClient的feign接口bean
+    排查思路：
+        1.@EnableFeignClients -> @Import({FeignClientsRegistrar.class}) -> registerBeanDefinitions方法这里就是注入Feign接口
+            bean的地方，发现这里被调用了两次，说明@EnableFeignClients注解在两个Bean上都定义了，所以导致进入了两次，导致Bean冲突；
+        2.到yml文件中添加配置：management.endpoints.web.exposure.include=beans 打印出bean的来源jar包路径，然后到本地仓库找到对应的jar
+            删除后，再重新启动就可以了，排查时可以先改名字试试成功后再删除；
+4.db.orderSystem_distributionModel.aggregate([
+      {
+          $match: {
+              insertTime: {
+                  $gte: ISODate("2000-02-13T16:00:00Z"),
+                  $lte: ISODate("2026-03-13T19:46:32.999Z")
+              }
+          }
+      },
+      { $limit: 10000 }
+  ])查询的数据缺少一条insertTime时间等于：2023-03-13 03:46:31.973的数据
+    原因：MongoDB支持弱类型存储，即同一个字段（如insertTime）可以存储不同的数据类型（Date、String、NumberLong等）。
+        但查询时是严格类型匹配的，也就是说：
+        如果insertTime存的是Date类型，find查询时用Date类型才会匹配到；
+        如果insertTime存的是String类型，用Date类型查询不会匹配到，而必须用String查询。
+        分组统计这个字段的类型有那几种：
+        db.orderSystem_distributionModel.aggregate([
+            {
+                $group: {
+                    _id: { $type: "$insertTime" }, // 按类型分组
+                    count: { $sum: 1 }             // 统计每种类型的数量
+                }
+            }
+        ])
+    解决方法：直接使用String类型去匹配查询，就会匹配类型时String类型的数据
+        db.orderSystem_distributionModel.find({
+            insertTime: {
+                $gte: "2000-02-13T16:00:00Z",
+                $lte: "2026-03-13T19:46:32.999Z"
+            }
+        })
+5.使用批量MybatisPlus的批量新增以及使用ON DUPLICATE KEY UPDATE批量新增时出现数据库锁等待超时，但是单条执行确可以
+6.WebConfig出现bean名称重复？
+   1.到yml文件中添加配置：management.endpoints.web.exposure.include=beans 打印出bean的来源jar包路径
+   2.发现有一个WebConfig的路径是pay-gateway-controller项目的类路径，但是我项目中之前引入了这个但是删除了，
+        因此到target中去看，发现target确实存在类路径是pay-gateway-controller项目的WebConfig的类，
+        所以是java的编译class文件没有更新导致，把target删除后从新编译就好了；
+7.异步导出任务，采用rabbitMQ实现
+    1.只创建一个队列且只有一个消费者组，也就是一个消费者进行串行化
+    2.生成导出数据的时候加一个分布式锁，只允许有一个线程进行生成任务，设置消费者同步回复ack，没消费完成一直阻塞
+    3.针对生成导出数据耗时较长的任务，导致ack超时的问题，也就是消费超时，会导致生产者重试，那我们执行任务时先判断一下分布式锁是否存在
+        如果存在则使用sleep阻塞该线程一段时间后，再次获取分布式锁任务，如果还是获取不到则把该消息再次发送到队列里面，然后结束回复ack，
+        这里下一个任务过来还是走第三步逻辑重复操作，这样超时的消息会一直往后面再次排队，解决了消费者没有消费成功的问题；
+    4.如果获取到分布式锁了，则先判断一下生成任务的状态，如果是已完成则不重复生成了，直接结束方法执行完成，否则才走生成任务的逻辑；
+    5.如果还未生成完成服务重启了，生产者会进行重试；
+8.nacos自动刷新
+    //如果没有值会默认是空ignoreInvalidFields = true
+    @ConfigurationProperties(prefix = "product.subclass",  ignoreInvalidFields = true)
+    private List<String> filterSubClassArray;
+    #需要过滤掉不进行分润的产品类型配置
+    product:
+      subclass:
+        filterSubClassArray:
+          - AI100
+          - H002
+    这里注意如果想动态把这个配置赋值为null，那么不能直接把这个配置全注释，而是删除数组下面的数据保留空配置
+    product:
+      subclass:
+        filterSubClassArray:
+9.如果group_mark有等于8b2ba236bfcc4230b28cb92627b46330的值则排在第一个，否则按照后面id和create_time进行排序
+SELECT a.`group_id`,a.`create_time`, a.id,d.* FROM allocation a
+LEFT JOIN `distribution_model_change` d ON d.id = a.`group_id`
+WHERE a.owner = '62edcc85de1e72772c19a4ad' AND a.`commodity` = '65eff8224b07433140010be0' AND a.create_time <= '2025-05-19T02:11:09'
+ORDER BY case when d.`group_mark` = '8b2ba236bfcc4230b28cb92627b46330' then 1 else 2 end asc,a.id desc, a.`create_time` desc;
+10.git提交的test分钟显示resources路径下的mapperRateUsdCnyDao.xml文件已经被删除了，但是jenkins打包的mapperRateUsdCnyDao.xml依然存在
+    可能你的本地git删除了该XML文件，但Jenkins构建使用的是旧的构建缓存或未清理的工作目录。
+    解决方法：在Jenkins构建任务中增加以下清理步骤：
+    # 清理旧文件（如工作区）
+    rm -rf target/
+    git clean -fdx  # 强制删除未追踪的文件
+11.<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN""http://www.w3.org/TR/html4/strict.dtd">
+   <HTML><HEAD><TITLE>Bad Request</TITLE>
+   <META HTTP-EQUIV="Content-Type" Content="text/html; charset=us-ascii"></HEAD>
+   <BODY><h2>Bad Request - Request Too Long</h2>
+   <hr><p>HTTP Error 400. The size of the request headers is too long.</p>
+   </BODY></HTML>
+   原因：cn.hutool.http.HttpRequest的http请求可能存在问题
+   解决办法：切换成使用apache的http请求
+12.MongoDB查询语句
+    查询出来缺失一条时间在查询时间范围的数据
+    db.orderSystem_distributionModel.find({
+      $or: [
+        { insertTime: { $exists: false } },
+        { insertTime: null },
+        { insertTime: { $gte: ISODate("1999-12-31T16:00:00Z"), $lte: ISODate("2049-12-31T16:00:00.999Z") } }
+      ]
+    })
+    找出这一条不在上面时间范围查询条件的数据，发现这个insertTime类型是一个String类型，不是Date类型导致查询不出来
+    db.orderSystem_distributionModel.find({
+      $or: [
+        { insertTime: { $exists: false } },
+        { insertTime: null },
+        { insertTime: { $not: { $gte: ISODate("1999-12-31T16:00:00Z"), $lte: ISODate("2049-12-31T16:00:00.999Z") } } }
+      ]
+    })
+13.Navicat Premium出现导入excel时2024-06-02变成0000-00-00
+    将excel打开后点击时间内容，时间会自动变成2024/6/2这样就行了
+    解决方式：wps将数字快速转换为日期，选择日期这一整列，然后选择上面的菜单：数据->分列
+    地址：https://bbs.wps.cn/topic/16262
+14.swagger从网关地址打开不了，但是从应用实例中打开能打开
+    原因：gateway比应用实例后重启导致，所以等待gateway网关启动成功后再重启应用服务实例就可以了
+15.使用mybatisPlus的批量新增语句，出现死锁
+    原因：每次批量新增1000条，导致间隙锁死锁，因为这1000条的数据是多个insert而不是insert values，查看死锁持有的索引，因为锁是基于索引的
+        查看后UNIQUE KEY `idx_owner` (`owner`,`date`,`type`)两个线程死锁线程持有的锁是这个索引
+    解决办法：因为新增时owner是无序的，导致新增事务的时候产生了间隙，所以导致死锁，解决办法把批量新增改成100要间隙变小，或者按照owner排序；
+16.订单查询优化，从10s优化到1秒以内
+    全量查询count(*)使用：
+         这个是查询的预估值：SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_NAME = 'order_goods' AND TABLE_SCHEMA = 'paycenter';
+    CompletableFuture.supplyAsync()使用两个这个异步线程分别查询条数和数据；
+    CompletableFuture.allOf(countFuture, listFuture).join();等待两个异步线程的查询结果
+17.org.apache.shiro.web.filter.authc.BasicHttpAuthenticationFilter继承了这个过滤器的public class JwtFilter extends BasicHttpAuthenticationFilter
+    的过滤器的isAccessAllowed()执行了两次
+    原因是：@Bean("shiroFilterFactoryBean")
+          public ShiroFilterFactoryBean shiroFilter(SecurityManager securityManager){
+            // 添加自己的过滤器并且取名为jwt
+            Map<String, Filter> filterMap = new HashMap<String, Filter>(1);
+            //如果cloudServer为空 则说明是单体 需要加载跨域配置【微服务跨域切换】
+            Object cloudServer = env.getProperty(CommonConstant.CLOUD_SERVER_KEY);
+            filterMap.put("jwt", new JwtFilter(cloudServer==null, env));
+            shiroFilterFactoryBean.setFilters(filterMap);
+          }
+          @Bean
+          public FilterRegistrationBean shiroFilterRegistration() {}
+        注入了两次，导致过滤器被执行两次，会导致如果过滤器中取拿body里面的请求参数时会在第二次那的时候拿不到，因为请求留只能拿一次
+        io.undertow.servlet.handlers.FilterHandler.FilterChainImpl#doFilter这个方法里面查看所有的过滤器，找到执行了两次的过滤器Bean;
+    解决办法：
+        1.方法一：可以删除shiroFilterRegistration()这个Bean的注入
+        2.方法二：新增一个过滤器且顺序放到最前面：
+        @Bean
+            public FilterRegistrationBean<WebFilter> webFilterRegistration(WebFilter webFilter) {
+                FilterRegistrationBean<WebFilter> registration = new FilterRegistrationBean<>();
+                registration.setFilter(webFilter);
+                registration.setOrder(Integer.MIN_VALUE); // order 越小越优先
+                registration.addUrlPatterns("/*");
+                return registration;
+            }
+        @Slf4j
+        @Component
+        public class WebFilter implements Filter {
+
+            public void doFilter(ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain){
+                servletRequest = requestWrapper(servletRequest);
+                filterChain.doFilter(servletRequest, servletResponse);
+            }
+            /**
+             * 请求包装(特定条件下进行请求包装,支持body重复读取)
+             *
+             * @param servletRequest 原请求
+             * @return 包装后的请求
+             */
+            public ServletRequest requestWrapper(ServletRequest servletRequest) {
+                if (servletRequest instanceof HttpServletRequest) {
+                    HttpServletRequest req = (HttpServletRequest) servletRequest;
+                    String contentType = req.getContentType();
+                    if (contentType == null) {
+                        contentType = "";
+                    }
+                    // POST请求类型，并且不是表单请求,才获取POST请求体
+                    if (CommonConstant.HTTP_POST.equals(req.getMethod())
+                            && !contentType.toLowerCase().contains("form")) {
+                        return new BodyReaderHttpServletRequestWrapper(req);
+                    }
+                }
+                return servletRequest;
+            }
+    	}
+18.java.lang.NoClassDefFoundError: org/jeecg/ext/utils/VeepaiRequestUtil
+    com.veepai.filter.WebFilter.doFilter(WebFilter.java:130)
+    原因：WebFilter过滤器使用的VeepaiRequestUtil类，没有使用新的私服仓库的jar，而是使用的本地仓库的旧jar包
+        生产jenkins发版的时候install没有从maven私服仓库拉取新的jar包覆盖本地仓库的相同版本的旧jar包导致；
+    解决办法：
+        1.打包的时候使用deploy每次强制刷新maven私服仓库和本地仓库；
+        2.代码的pom中新增install后强制覆盖本地maven仓库的相同版本的jar包问题
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-install-plugin</artifactId>
+                        <version>3.1.1</version>
+                        <configuration>
+                            <force>true</force>  <!-- 强制覆盖 -->
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+19.线上jvm的参数
+    CMD ["java", "-Xms4096m"， "-Xmx4096m"，"-Xss256k", "-XX:MetaspaceSize=256m","-XX:MaxMetaspaceSize=384m",\
+        "-XX:+UseG1GC"，"-XX:G1HeapRegionSize=32m",
+        "-XX:MaxGCPauseMillis=200",
+        ，"-XX:ParallelGCThreads=4"，
+        "-XX:ConcGCThreads=2",
+        "-XX:InitiatingHeap0ccupancyPercent=45",
+        "-xX:G1ReservePercent=15"，\
+        "-XX:+UseContainerSupport","-XX: InitialRAMPercentage=75.0","-X:MaxRAMPercentage=80.0",\
+        "-xX:+DisableExplicitGC","-xX:+UseStringDeduplicat1on"，"
+        "-XX:+HeapDumpunuututMemoryError",\
+        "-XX:HeapDumpPath=/logs/heapdump/", "-Xlog:gc*=info:file=/logs/gc-logs/gc-%t. log:time,level:filecount=5,filesize=100m",\
+        "-D1o.undertow.1o-threads=4"，
+        "=D1o.undertow.workers=350"，\
+        "-Dio.undertow.buffer-size=2048", "-Dio.undertow.direct-buffers=true",
+        "-Djava.net.preferIPv4Stack=true", "-Dfile.encoding=UTF-8",\
+        "-jar", "pay-gateway-cloud-start.jar"]
+    FOF
+20.数据迁移的过程中出现java.lang.OutOfMemoryError: Java heap space
+    分析：通过MAT工具查看代码对象，发现迁移商品套餐销售额和收益统计表的过程中事件范围在2025-01-01到2027-07-18，对象过多导致oom，
+        查看代码发现，其实是有分批新增入库的操作，但是有个特殊情况是我们迁移的数据是从MongoDB迁移到mysql，这个产品套餐销售额和收益统计表
+        的pay(支付)和reduced(退款)是一个json数据，在解析json的时候没有去判断list数组中的数据是否超过限制的1000导致list数据暴增从而导致oom；
+21.jenkins构建出现测试环境出现tenant-base项目包到repo.spring.io外网私服下载导致构建速度很慢，因为本地项目在外网私服根本不存在导致拉取的时候卡很久
+    Downloading from spring-snapshots：http://192.168.190.100:8081/repository/maven-snapshots/com/veepai/pay/tenant/pay-tenant-base/1.1.0-sNAPSHOT/maven-
+    metadata.xml (1.0 kB at 50 kB/s)
+    Downloading from spring-snapshots: https://repo.spring.io/snapshot/com/veepai/tenant-base/1.1.0-SNAPSHoT/maven-metadata.xml
+    排查方法：先到项目里面搜索https://repo.spring.io
+            发现父级项目中的repositories存在配置，表示快照包会去这里拉取，repositories下会配置多个repository，会依次按照顺序去配置的私服拉取
+            <repository>
+                <id>spring-snapshots</id>
+                <name>Spring Snapshots</name>
+                <url>https://repo.spring.io/snapshot</url>
+                <snapshots>
+                    <enabled>true</enabled>
+                </snapshots>
+            </repository>
+    解决方法到setting.xml中新增（setting.xml的配置会覆盖pom文件里面配置的私服配置，因为setting.xml的优先级最高）：
+        1）如果你在settings.xml中配置了<mirror>，那么<repositories>中配置的所有仓库会被这个mirror接管，
+            不会再按你项目pom的顺序依次拉包，全部重定向到你的Nexus仓库。
+        2）所以即使你在pom.xml中写了10 个<repository>，如果 <mirrorOf>是*，那你只会走一个私服地址。
+        3）同一个依赖名，在多个仓库版本不一致时可能产生意料之外的行为
+            例如：jeecg的xx-api-1.0.0-SNAPSHOT.jar可能在spring snapshot、jeecg snapshot、sonatype snapshot中都存在，
+            但版本内容不同，先匹配到的就被使用了，不再尝试后面的。
+    <mirrors>
+        <!-- 快照版本统一指向公司私服 -->
+        <mirror>
+            <id>company-snapshots</id>
+            <mirrorOf>*,!spring-snapshots</mirrorOf> <!--除了spring-snapshots，spring-snapshots依旧会走https://repo.spring.io/snapshot-->
+            <url>http://192.168.190.100:8081/repository/maven-snapshots/</url>
+        </mirror>
+    </mirrors>
+22.服务突然被重启，运维查询日志反馈说内存溢出了
+    1.使用-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/logs/heapdump/pay.hprof把dump日志导出
+    2.出现内存快满了使用jhsdb jmap --pid <pid> --binaryheap --dumpfile /logs/pay_heap.hprof pid使用jps查询得到
+    3.使用mat工具分析发现java.lang.Thread对象最多，且都是空对象没有任务执行的线程对象，没有显示对应哪里的代码，
+        那么我们可以根据看哪里用到了new ThreadPool开头的对象，看看这里创建的线程池是否合理，是不是有地方一直在创建这个线程池；
+    4.测试代码的jvm参数：
+        -Xms32m -Xmx32m -Xss256k -XX:MetaspaceSize=16m -XX:MaxMetaspaceSize=16m -XX:+UseG1GC -XX:G1HeapRegionSize=1m -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=4 -XX:ConcGCThreads=2 -XX:InitiatingHeapOccupancyPercent=45 -XX:G1ReservePercent=15 -XX:InitialRAMPercentage=75.0 -XX:MaxRAMPercentage=80.0 -XX:+DisableExplicitGC -XX:+UseStringDeduplication -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/logs/heapdump/pay.hprof
+        -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=4344 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false
+    5.查看发现Retained Heap的最大深堆才219992 Bytes ≈ 0.21 MB，因此判定没有发生内存溢出
+    6.log日志中没有发现OutOfMemoryError的日志
+    7.和运维沟通发现查看内存的命令使用的是查看java应用使用了多少内存，而运维的内存溢出是k8s里面去检查如果内存超过百分之百就会kill掉pod进行重启
+        但是我们这个pod容器设置的内存是4G，而jvm的内存也是4G所以我们启动的时候内存就会很高，从而导致k8s的误判；
+    8.解决办法就是应用程序配置4G，那docker就得配置5G
+    9.docker-compose/paygateway.yml
+        services:
+        	paygateway:
+        		image: registry-vpc.cn-hangzhou.aliyuncs.com/veepai-server/pay-gateway-cloud-start:${VERSION}
+        		container_name: paygateway
+        		restart: always ports:
+        			-“7088:7088"
+        		volumes:
+        			-/root/logs:/logs
+        			-/root/ipdb:/app/ipdb
+        		network_mode: host
+        		deploy:
+        			resources:
+        			limits: cpus:'4.0' #限制使用4个CPU核心
+        			memory:4G #限制内存为4GB
+23.paymanage服务运行一段时间后出现oom异常
+    使用dump文件分析得出如下代码出现内存溢出，原因是因为CompletableFuture.supplyAsync()默认使用的线程池是ForkJoinPool.commonPool()的线程池
+    他的并发队列是Integer的最大值，高并发情况下会把内存打爆
+    CompletableFuture<List<ApiOrderPageVO>> listFuture = CompletableFuture.supplyAsync(() -> {
+        int offset = (query.getPage() - 1) * query.getLimit();
+        List<ApiOrderPageVO> list = orderGoodsMapper.apiOrderQueryPage(query, query.getLimit(), offset);
+        return list;
+    });
+24.java.lang.NullPointerException: Cannot invoke "org.springframework.web.context.request.ServletRequestAttributes.getRequest()" because the return value of "org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()" is null
+   	at org.jeecg.common.util.SpringContextUtils.getHttpServletRequest(SpringContextUtils.java:48)
+   	at com.veepai.interceptor.FeignInterceptor.lambda$customTraceInterceptor$0(FeignInterceptor.java:39)
+   	错误代码：
+   	@Bean
+    public RequestInterceptor customTraceInterceptor(AuthTransferStrategyFactory strategyFactory) {
+        return requestTemplate -> {
+            // 日志 traceId 透传
+            String traceNo = MDC.get(LogUtils.MDC_LOG_TRACE_NO);
+            if (StringUtils.isNotBlank(traceNo)) {
+                requestTemplate.header(LogUtils.MDC_LOG_TRACE_NO, traceNo);
+                log.debug("Feign (no context) traceId: {}", traceNo);
+            }
+
+            // 跨服务调用，透传认证信息
+            HttpServletRequest request = SpringContextUtils.getHttpServletRequest();
+            // 获取认证方式
+            AuthTransferStrategy strategy = strategyFactory.getStrategy(request);
+            if (strategy != null) {
+                // 透传认证信息
+                strategy.apply(request, requestTemplate);
+                log.info("Feign (no context) auth strategy: {}", strategy.getClass().getSimpleName());
+            }
+        };
+    }
+   	原因：这里的feign调是rabbitMQ里面的线程发起的，不是一个web请求，
+   	    所以在获取request请求信息的时候如下(SpringContextUtils.getHttpServletRequest())，会出现空指针
+        public static HttpServletResponse getHttpServletResponse() {
+            return ((ServletRequestAttributes) RequestContextHolder.getRequestAttributes()).getResponse();
+        }
+    解决办法：
+        先if(null != RequestContextHolder.getRequestAttributes())再调用SpringContextUtils.getHttpServletRequest()
+25. @DS("console_db")这个动态切换数据源的时候出现没切换成功问题
+    加一个@Transactional(propagation = Propagation.REQUIRES_NEW,rollbackFor = Exception.class)新开一个事物
+26.Caused by: java.lang.NoClassDefFoundError: com/obs/services/model/AccessControlList
+    原因：这个类是通过下面的pom引入的，而<scope>provided</scope>这个标签的意思是依赖不会往下传递导致的
+        <dependency>
+            <groupId>com.huaweicloud</groupId>
+            <artifactId>esdk-obs-java</artifactId>
+            <version>3.21.8</version>
+            <scope>provided</scope>
+        </dependency>
+    解决办法：把<scope>provided</scope>注释掉就行了
+
+
+
+
+
+

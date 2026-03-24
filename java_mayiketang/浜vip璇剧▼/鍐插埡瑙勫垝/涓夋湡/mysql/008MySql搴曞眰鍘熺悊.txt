@@ -1,0 +1,356 @@
+1.单表访问之索引合并
+    (1)Intersection合并(交集合并)
+        SELECT * FROM order_exp WHERE order_no = 'a' AND expire_time = 'b';
+        取order_no索引和expire_time索引的主键值的交集，然后再回表；
+    (2)在什么情况下使用到交集合并
+        1、等值匹配
+            二级索引的列都是等于匹配，而不是范围匹配，对于联合索引每个值都是等值匹配；
+        2、主键可以范围匹配
+            SELECT * FROM order_exp WHERE id > 100 AND insert_time = 'a'
+            因为聚集索引是按照主键排序的，而二级索引只有在等值匹配的情况下才是按照主键排序的；
+    (3)union合并
+        SELECT * FROM order_exp WHERE order_no = 'a' OR expire_time = 'b';
+        交易合并：
+            适用于and的连接情况；
+        union合并：
+            适用于OR连接的情况；
+    (4)Sort-Union合并
+        union合并的使用条件太苛刻，必须保证二级索引是等值匹配；
+        SELECT * FROM order_exp WHERE order_no< 'a' OR expire_time> 'z
+        上面这个因为上面两个条件查询的主键都不是排序好的，但是我们可以进行优化，先按照order_no< 'a'查询后将主键排序好，
+        然后按照expire_time> 'z查询后也将主键排序好，最后就是和union合并一样了；
+    (5)联合索引代替Intersection 索引合并
+        SELECT * FROM order_exp WHERE order_no= 'a' And expire_time= 'z';
+        直接建立order_no和expire_time列的联合索引；
+2.连接查询
+    (1)连接的本质
+        连接的本质就是把各个连接表中的记录都取出来依次匹配的组合加入结果 集并返回给用户;
+        SELECT * FROM e1, e2;这样的连接成为笛卡尔积；
+    (2)连接过程
+            SELECT * FROM e1, e2 WHERE e1.m1 > 1 AND e1.m1 = e2.m2 AND e2.n2 < 'd';
+        1.e1作为驱动表(假设e1.m1 > 1的数据较少)，所以e1的查询方法为all；
+        2.用驱动表中的结果集的每一条数据分别到e2表中匹配，因为是根据e1表的记录去找e2表的记录，索引e2是被驱动表；
+        3.因为驱动表e1的结果有两个，所以到e2表中查询两次：
+            一次：e2.m2 = 2、e2.n2 < 'd'；
+            二次：e2.m2 = 3、e2.n2 < 'd'；
+        总结：
+            如果把e1.m1 > 1这个条件去除，那么得到的结果有3条，这个时候需要到e2被驱动表访问3次；
+            因此得到结论，驱动表只需要访问一次，被驱动表可能被访问多次；
+    (3)内连接和外连接
+        内连接：
+            对于驱动表中的记录在被驱动表中找不到，则不会加入到结果集中；
+        外连接：
+            左外连接：
+                选择左边的表作为驱动表；
+            右外连接：
+                选择右边的表作为驱动表；
+            外连接中，驱动表的记录在被驱动表中找不到，仍然要将记录加入到结果集中；
+        where字句中的过滤条件
+            凡是不符合where条件的数据，不管是内连接还是外连接，都不会加入到结果集中；
+        ON字句的过滤条件
+            对于外连接，如果on条件的数据在被驱动表中无法找到记录，则仍然需要加入到结果集中，且被驱动表的字段显示null；
+            对于内连接，on条件和where条件是同等的；
+        语法：
+            内连接：
+                SELECT * FROM e1 JOIN e2;
+                SELECT * FROM e1 INNER JOIN e2 ON e1.id = e2.id;
+                SELECT * FROM e1 CROSS JOIN e2;
+            外连接：
+                SELECT * FROM e1 LEFT JOIN e2 on e1.id = e2.id;
+                SELECT * FROM e1 RIGHT JOIN e2 on e1.id = e2.id;
+3.MySql对连接的执行
+    (1)嵌套循环连接(Nested-Loop Join)
+        对于多表连接查询来说，其实就是一个嵌套循环查询；
+        对于查询复杂度来说，驱动表只需要查询一次，但是被驱动表的查询次数取决于驱动表中的记录数；
+        使用最简单的查询方式，时间复杂度O(N*M*L)，也就是三个表的记录数相乘；
+    (2)使用索引加快连接速度
+        在连接条件中建立索引来优化，被驱动表在select中的字段不要使用*，尽量使用覆盖索引；
+    (3)基于块的嵌套循环连接(Block Nested-Loop Join)
+        使用join buffer来优化，在查询的时候申请一块固定大小的内存，将驱动表的记录若干份分别存入join buffer；
+        然后在join buffer中的记录依次与被驱动表的记录表匹配，减少了驱动表的磁盘io，因为join buffer是在内存中；
+        join buffer的大小是可以设置的，默认为262144字节（也就是 256KB）最小可以设置为 128 字节。
+        查询join buffer大小命令：
+            show variables like 'join_buffer_size' ;
+        如果不能使用索引，那么久可以根据机器的性能，来把这个join buffer的大小进行调大；
+        注意：
+            驱动表的记录不是所有的列都被加入到join buffer中，而是只有查询列表和过滤条件中的列才会放入到join buffer中，
+            所以我们在查询的时候不要使用select *，尽量使用业务需要的字段；
+4.MySql的成本
+    (1)什么是成本
+        IO成本：
+            表示读取磁盘上的索引和数据到内存中的操作；
+        CPU成本：
+            对读取到内存中的数据做条件过来、排序等耗时操作；
+        InnoDB的成本：
+            读取一个页面的成本是：1.0；
+            读取以及检测一条记录是否符搜索条件的成本：0.2；
+            这两个成本是一个常数，我们当成常数计算后比较就行，没有单位，因为单位的意义不大；
+            注意：
+                不管读取的记录需不需要检测条件是否满足，成本都是0.2；
+    (2)单表查询成本
+        执行引擎计算成本的步骤：
+            1、根据条件，找出所有可能使用到的索引；
+            2、计算全表扫描的代价；
+            3、计算使用不同索引执行查询的代价；
+            4、对比各种执行方案的代价，找出成本最低的那一个；
+        例如：
+            SELECT * FROM order_exp
+            WHERE order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S')
+                    AND expire_time> '2021-03-22 18:28:28'
+                    AND expire_time<= '2021-03-22 18:35:09'
+                    AND insert_time> expire_time
+                    AND order_note LIKE '%7排1%'
+                    AND order_status = 0
+        1、涉及到的搜索条件：
+            1、order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S')
+                这个搜索条件可以使用二 级索引 idx_order_no
+            2、expire_time> '2021-03-22 18:28:28' AND expire_time<= '2021-03-22 18:35:09'
+                这个搜索条件可以使用二级索引 idx_expire_time。
+            3、insert_time> expire_time
+                这个搜索条件的索引列由于没有和常数比较，所以并不能使用到索引。
+            4.order_note LIKE '%hello%'，order_note
+                即使有索引，但是通过 LIKE 操作符和 以通配符开头的字符串做比较，不可以适用索引。
+            5.order_status = 0
+                由于该列上只有联合索引，而且不符合最左前缀原则，所 以不会用到索引。
+            得出possible keys(可能使用到的索引)：
+                idx_order_no,idx_expire_time；
+        2、计算全表扫描的代价
+            全表扫描就是把聚簇索引中的所有记录，与过滤条件进行匹配；
+            因此需要将所有的记录都加载到内存中，然后根据条件进行匹配过滤；
+            查询成本 = I/O成本 + CPU成本；
+            全表扫描的代价需要的两个信息：
+                聚簇索引占用的页面数
+                该表中的记录数，mysql为每个表维护了一系列的统计信息
+                采集方式命令：（mysql查询计算成本语法）
+                    SHOW TABLE STATUS
+                    SHOW TABLE STATUS LIKE 'order_exp'\G
+                统计主要关注的两个列：
+                    Rows
+                    表示表中的记录数，对于MYISAM存储引擎来说，该值是一个准确值；
+                    对于InnoDB存储引擎来说，这是一个预估值；
+                    Data_length
+                    表示存储空间占用的字节数，对于MYISAM存储来说，该值是数据文件的大小；
+                    对于InnoDB存储来说，该值就是数据文件的大小，相当于聚簇索引占用的存储空间大小；
+                    Data_length = 聚簇索引的页面数量 x 每个页面的大小；
+                    一个页的大小为16KB，以此来推到出聚簇索引页面数量(字节换算成KB，需要除以1024)；
+                    聚簇索引的页面数量 = 1589248 ÷ 16 ÷ 1024 = 97
+                    得到聚簇索引的总页面后，就可以计算成本了；
+                    I/O成本：
+                        97 * 1.0 + 1.1 = 98.1
+                        97表示聚簇索的总页数，1.0表示加载一个页面的成本常数，1.1是一个微调值；
+                    CPU成本：
+                        10350 x 0.2 + 1.0 = 2071 0.2 + 1.0 = 2071
+                        10350表示数据总记录数，0.2表示访问一条记录所需的成本常数，1.0是一个微调值；
+                    总成本：
+                        98.1 + 2071 = 2169.1
+        3.计算使用不同索引执行查询的代价
+            (1)使用idx_expire_time执行查询的成本分析
+                索引：expire_time> '2021-03-22 18:28:28' AND expire_time<= '2021-03-22 18:35:09'
+                扫描区间是：('2021-03-22 18:28:28' , '2021-03-22 18:35:09')
+                使用idx_expire_time搜素将使用二级索引 + 回表方式查询，MySql计算这种查询成本的依赖有两个方面：
+                1、范围区间数量
+                    无论二级索引的区间占了多少个页面，查询优化器认为读取索引的一个范围区间的I/O成本和读取一个
+                    页面是相同的，idx_expire_time的范围只有一个；
+                    付出的 I/O 成本就是：
+                        1 x 1.0 = 1.0；
+                2、需要回表的记录数(也就是查询二级索引的记录数，找到对应的主键值)
+                    如果这个区间左边记录和右边记录相隔不远(在MySql 5.7.3版本中，相隔不大于10个页面)，就可以精确统计
+                    满足条件的数据记录数，否则沿着左边读取10个页面，计算出平局页面记录数，然后再计算总页面数，计算
+                    页面数使用计算左边和右边之间的父节点记录数，就能估算出总页面数；
+                    我们实际查看记录数可以查看explain记录中的rows:
+                        explain SELECT * FROM order_exp
+                        WHERE expire_time> '2021-03-22 18:28:28' AND expire_time<= '2021-03-22 18:35:09';
+                    读取这39条二级索引记录需要付出的 CPU 成本就是：
+                        39 x 0.2 + 0.01 = 7.81
+                    39表示读取二级索引的记录数，0.2是读取一条记录的成本常数，0.01是微调；
+                获取到二级索引的记录后，还需要干两件事：
+                1、根据这些记录数的主键值到聚簇索引中做回表操作
+                    MySql评估回表操作的I/O成本，访问每条记录相当于访问一个页面；
+                    因此回表的I/O成本：
+                        39 x 1.0 = 39 .0
+                    39表示预计的二级索引记录数，1.0表示一个页面的I/O成本常数；
+                2、回表操作后得到的完整用户信息记录，然后再检测其他搜索条件是否成立
+                    检测搜索条件是否符合要求的CPU成本：
+                        39 x 0.2 =7.8
+                    39表示待检测的记录数，0.2表示检测一条记录是否符合搜索条件的成本常数；
+                    总结出idx_expire_time执行查询的成本：
+                    I/O成本：
+                        1.0 + 39 x 1.0 = 40.0（范围区间 + 预估的二级索引记录条数）
+                    CPU成本：
+                        39 x 0.2 + 0.01 + 39 x 0.2 = 15.61（读取二级索引记录的成本 + 读取并
+                        检测回表后扫描聚簇索引记录成的成本）
+                    总成本：
+                        40 .0 + 15.61 = 55.61
+            (2)使用 idx_order_no 执行查询的成本分析
+                索引：order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S')
+                扫描区间是：3个，每一个in值都是一个单点扫描区间；
+                1、范围扫描成本
+                    3 x 1.0 = 3.0
+                    3个扫描区间，1表示扫描的成本常数
+                2、需要回表的记录数
+                    explain SELECT * FROM order_exp WHERE order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S');
+                    使用explain查询需要扫描的记录数rows，这条sql的rows的值是58；
+                    读取二级索引记录的CPU成本：
+                        58 x 0.2 + 0.01 = 11.61
+                    回表I/O成本：
+                        58 x 1.0 = 58.0
+                    回表CPU成本：
+                        58 x 0.2 = 11.6
+                3.idx_order_no 执行查询的成本
+                    I/O 成本： 3.0 + 58 x 1.0 = 61.0 (范围区间的数量 + 预估的二级索引记录条数)
+                    CPU 成本： 58 x 0.2 + 58 x 0.2 + 0.01 = 23.21 （读取二级索引记录的成本 + 读取并检测
+                                回表后聚簇索引记录的成本）
+                    用 idx_order_no 执行查询的总成本就是：
+                        61.0 + 23.21 = 84.21
+                4.是否有可能使用索引合并（Index Merge）
+                    order_no 和 expire_time是用and连接的，但是order_no 和 expire_time都是范围查询，
+                    所以不能使用索引合并，因为索引合并只能是等值匹配，范围查询的扫描区间无法保证主键有序的；
+                5.对比后选择成本最低的
+                    全表扫描的成本：2148.7
+                    使用 idx_expire_time 的成本：55.61
+                    使用 idx_order_no 的成本：84.21
+                    因此会使用idx_expire_time来执行查询；
+                    注意：
+                        1、mysql的源码中对成本计算实际是更复杂，但是基本思想是这样
+                        2、mysql的实际计算中，在和全文扫描比较时，使用索引的成本会去除回表的成本，
+                            也就是说我们通过mysql看到的成本将会是：
+                            idx_expire_time 为 47.81(55.61-7.8)，idx_order_no 为 72.61(84.21-11.6)。
+                            但是mysql比较完一次后，会再计算一次使用索引的成本，此时会加上回表成本；
+    (3)基于索引统计数据的成本计算
+        1、index dive
+            MySQL 把这种通过直接访问索引对应的 B+树来计算某个范围区间对应的索引记录条数的方式称之为index dive；
+            系统变量eq_range_index_dive_limit，表示in后面参数的个数，如果超过这个数字就不能使用 index dive了，
+            就会使用索引预估来计算；
+            查询系统变量eq_range_index_dive_limit的值命令：show variables like '%dive%';
+            每个表都维护了一份统计数据，查询命令：show index from order_exp;
+            注意：
+                在MySQL 5.7.3以及之前的版本中，eq_range_index_dive_limit的默认值为10，之后的版本默认值为200；
+        2、MySql的索引数据统计表
+            show index from order_exp;详情见笔记
+5.再深入Explain
+    (1)Explain输出成本
+        explain format=json SELECT * FROM order_exp
+        WHERE order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S') AND expire_time> '2021-03-22 18:28:28'
+            AND expire_time<= '2021-03-22 18:35:09' AND insert_time> expire_time AND order_note LIKE '%7 排 1%'
+            AND order_status = 0
+        具体参数参考详情笔记
+    (2)Optimizer Trace 优化器执行计划记录
+        查看优化器执行计划记录存储开关变量：optimizer_trace；
+        查看命令：SHOW VARIABLES LIKE 'optimizer_trace';
+        如果打开这个命令那么enabled 的值改为 on；
+        改成on的命令：SET optimizer_trace="enabled=on";
+        具体执行计划的演示步骤看详情笔记；
+6.连接查询成本
+    (1)Condition filtering
+        连接查询的成本由两部分构成：
+            单次查询驱动表的成本；
+            多次查询被驱动表的成本（具体查询多少次取决于驱动表查询的结果集有多少条记录）
+        对驱动表查询后得到的记录数称之为驱动表的扇出（英文名：fanout）；
+        SELECT * FROM order_exp AS s1 INNER JOIN order_exp2 AS s2
+        WHERE s1.expire_time> '2021-03-22 18:28:28' AND s1.expire_time<= '2021-03-22 18:35:09'
+            AND s1.order_no IN ('DD00_6S', 'DD00_9S', 'DD00_10S') AND s1.order_note > 'xyz';本查
+        如果是全表扫描的方式执行单表查询，那么计算表驱动表扇出时需要猜测满足搜索条件的记录到底有多少条；
+            我自己猜的：猜测的方式是使用索引统计记录的重复率 * 查询10页取平均值；
+        如果使用索引执行单表扫描，那么计算驱动表扇出时需要猜测满足搜索条件的记录到底有多少条；
+        我们把这种猜测的过程称之为condition filtering，这个过程可能用到索引，页可以能用到统计数据，具体很复杂；
+        MySql5.7版本之前，查询优化器计算扇出时，如果使用全表扫描的话，就直接使用全表的数据量作为扇出；
+            如果使用了索引的话就只能用满足条件的数据作为扇出；
+        MySql5.7版本之后，引入了Condition filtering，就是还需要猜测剩余的搜索条件，把驱动表中的记录再过滤掉一部分，
+            其本质就是为了让成本算的更加精准，MySql把这种瞎猜叫做启发式规则；
+    (2)两表连接的成本分析
+        连接查询的成本计算公式：
+        连接查询总成本 = 单词查询驱动表的成本 + 驱动表的扇出数 * 单词访问被驱动表的成本；
+    (3)调节成本常数
+        一般不建议调，因为mysql的成本分析是非常复杂的，除非你有足够的自信能超越mysql源码的设计；
+7.InnoDB中的数据统计
+    (1)统计数据的方式
+        有两种：
+            永久性数据统计，数据存储在磁盘中，也就是说服务器重启后这些数据仍然还在；
+            非永久性数据统计，数据存在在内存中，服务器重启后这些数据就没有了；
+        MySql提供了系统变量innodb_stats_persistent来控制到底采用哪种统计方式；
+        在MySql 5.6.6之前，innodb_stats_persistent的值默认是OFF，也就是采用非永久性统计，
+        之后的版本中为ON，也就是默认永久性数据统计；
+        查看命令：SHOW VARIABLES LIKE 'innodb_stats_persistent';
+    (2)基于磁盘的永久性统计数据
+        查看统计表的命令：SHOW TABLES FROM mysql LIKE 'innodb%';
+        innodb_index_stats存储着关于表的统计数据，每一条记录对应着一个表的统计数据；
+        innodb_index_stats存储着关于索引的统计数据，没一条记录对应这一个索引的统计项的统计数据；
+    (3)定期更新统计数据
+        随着我们不断的对表进行crud，表中的数据一直在变化，那么统计数据也需要跟着变化；
+        MySql有两种更新统计数据方法：
+            1、开启innodb_stats_auto_recalc，表示服务器是否自动重新计算统计数据，它的默认值ON，当表中
+            的记录数超过10%发生变化后，那么服务器就会重新进行统计，会更新innodb_table_stats
+            和innodb_index_stats表，统计不会立即出发，会延时几秒；
+                InnoDB 默认是以表为单位来收集和存储统计数据的，我们也可以单独为某个表设置是否自动重新
+            计算统计数的属性，设置方式就是在创建或修改表的时候通过指定STATS_AUTO_RECALC属性来
+            指明该表的统计数据存储方式；
+            2、手动调用ANALYZE TABLE 语句来更新统计信息
+    (4)手动更新innodb_table_stats和innodb_index_stats表；
+8.MySql的查询重写规则
+    (1)移除不必要的括号
+        原sql：((a = 5 AND b = c) OR ((a > c) AND (c < 5)))
+        优化后：(a = 5 and b = c) OR (a > c AND c < 5)
+    (2)常量传递
+        原sql：a = 5 AND b > a
+        优化后：a = 5 AND b > 5
+        原mysql：a = b and b = c and c = 5
+        优化后：a = 5 and b = 5 and c = 5
+    (3)移除没用的条件
+        原sql：(a < 1 and b = b) OR (a = 6 OR 5 != 5)
+        优化后：(a < 1 and TRUE) OR (a = 6 OR FALSE) 继续优化a < 1 OR a = 6
+    (4)表达式计算
+        原sql：a = 5 + 1
+        优化后：a = 6
+        注意：
+            ABS(a) > 5 或者： -a < -8
+        优化器不会尝试对对这种表达式进行优化，只有搜索条件中索引列和常数使用某些运算符连接起来才可能使用到索引；
+    (5)常量表检测
+        原sql：SELECT * FROM table1 INNER JOIN table2 ON table1.column1 = table2.column2 WHERE table1.primary_key = 1;
+        优化后：SELECT table1 表记录的各个字段的常量值, table2.* FROM table1
+            INNER JOIN table2 ON table1 表 column1 列的常量值 = table2.column2;
+    (6)外连接消除
+        原sql：SELECT * FROM e1 LEFT JOIN e2 ON e1.m1 = e2.m2 WHERE e2.n2 IS NOT NULL;
+        优化后：SELECT * FROM e1 INNER JOIN e2 ON e1.m1 = e2.m2 WHERE e2.m2 = 2;
+    (7)子查询优化
+        EXISTS子查询：SELECT * FROM e1 WHERE EXISTS (SELECT 1 FROM e2);
+        对于子查询SELECT 1 FROM e2，并不关心查出的结果是什么，真正关心的是子查询的结果集中是否存在记录，
+        也就是说SELECT 1 FROM e2中有记录，那么整个EXISTS的结果就为true；
+9.再次深入查询优化
+    通过show profile分析SQL
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

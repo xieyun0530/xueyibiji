@@ -1,0 +1,58 @@
+1.什么是原子操作
+    假设有A和B两个线程：对于A线程来说，看到的是要么B线程的任务全部执行，要么全部不执行；
+                        对于B线程来说，也是一样要么A线程的任务全部执行，那么全部不执行。
+    synchronized可以保证线程的原子性，但是这种保证原子性的方式，是每次同时只允许一个
+    线程来访问，这样的性能太低效，因此jdk提供了一个CAS方式的无所化机制来保证多线程
+    下操作的原子性。
+2.CAS
+    原理：可以用一句话总结，比较交换；是在硬件层面CPU和内存再加上volatile变量的特性实现的原子操作。
+    实现方式：每个CAS操作过程都包含三个运算符，一个是内存地址V，一个是期望值A和新值B，
+              操作的时候如果这个内存上的值是A，就将地址的值修成为B，否则不做任何操作，
+              但是要返回原值是多少，然后cas不断的循环这个操作，直到修改成功。
+    ABA问题：就是说比如A线程在操作A值时，有一个线程在这个之前将A改成了B然后又修改回了A,
+             也就是A->B->A，这样CAS是检测不到的；解决方式，使用版本号的方式,1A->2B->3A；
+             jdk提供了AtomicStampedReference和AtomicMarkableReference来记录版本号，解决
+             ABA问题，它们两个的区别是，AtomicStampedReference记录了修改了几次，而
+             AtomicMarkableReference则记录的是是否修改了。
+    循环开销问题：自旋CAS如果长时间不成功，就会给CPU带来非常大的开销。
+    只保证一个共享变量的原子操作：jdk提供了AtomicReference类来保证引用对象之间的原子操作。
+3.jdk中相关原子操作类的使用
+    AtomicInteger的api：
+        int addAndGet(int delta)：先相加然后再返回相加后的值
+        boolean compareAndSet(int expect,int update)：如果内存值等于预期值expect，则将该值设置为输入值update
+        int getAndIncrement()：将当前值加1，返回自增前的值
+        int getAndSet(int newValue)：设置为newValue的值，并返回旧值
+    AtomicIntegerArray：
+        int addAndGet(int i,int delta)：将数组下标为i的值修改成delta
+        boolean compareAndSet(int i,int expect,int update)：如果内存值等于预期值expect，则将下标为i的值修改成update
+        使用该原子类时，原数组的值是不会发生改变的，AtomicIntegerArray使用的是值拷贝的方式
+    引用类型：
+    AtomicReference：原子更新引用类型
+    AtomicStampedReference：使用版本号的方式保证ABA问题的发生
+    AtomicMarkableReference：使用一个布尔类型来标识是否发生了ABA问题
+    原子跟新字段类
+    AtomicIntegerFieldUpdater：原子更新整型的字段的更新器
+    AtomicLongFieldUpdater：原子更新长整型字段的更新器
+    AtomicReferenceFieldUpdater：原子更新引用类型里的字段
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

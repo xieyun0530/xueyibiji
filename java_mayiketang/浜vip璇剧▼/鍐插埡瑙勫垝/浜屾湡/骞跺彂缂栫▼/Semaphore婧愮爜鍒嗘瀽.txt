@@ -1,0 +1,181 @@
+1.Semaphore的原理
+  Semaphore的是一个拥有计数信号量，也就是说它可以对这个计数器的信号量设置一个固定大小的阀值，
+  当出现多线线程竞争的时候，对这个阀值进行扣减，当阀值扣减到零时，线程会阻塞放入到同步队列
+  中，等待获取到了信号的线程释放锁后唤醒，当有获得了信号的线程释放了锁后，会去唤醒它的后继
+  节点上的线程，这个后继线程就会去争夺同步状态，如果争夺成功，就拿到了执行权，等待cpu调度，
+  如果失败，则继续阻塞等待被再次唤醒。
+2.源码分析
+  (1)acquire获取信号
+     public void acquire() throws InterruptedException {
+        this.sync.acquireSharedInterruptibly(1);//获取同步锁
+    }
+	public final void acquireSharedInterruptibly(int var1) throws InterruptedException {
+		/*判断当前线程是否中断*/
+        if(Thread.interrupted()) {
+            throw new InterruptedException();
+        } else {
+		    /*这个是Semaphore自己实现的AQS同步器中的模板方法，也就是具体怎么获取锁的方法
+			  这个在Semaphore中如果返回小于0，说明获取同步状态失败
+			  */
+            if(this.tryAcquireShared(var1) < 0) {
+                this.doAcquireSharedInterruptibly(var1);
+            }
+
+        }
+    }
+	/*这个是AQS提供子类实现的模板方法（返回小于0说明没有获取到信号，大于0获取到锁）*/
+	protected int tryAcquireShared(int var1) {
+		int var2;
+		int var3;
+		do {
+			/*如果同步队列中的hread节点和tail节点不相等，
+			  且满足hread节点的后继节点等于null或者hread节点的后继节点的线程不是当前线程，则返回true，否则返回false*/
+			if(this.hasQueuedPredecessors()) {
+				return -1;
+			}
+			/*获取当前同步状态的值*/
+			var2 = this.getState();
+			/*对当前同步状态减var1*/
+			var3 = var2 - var1;
+			/*如果var3大于或者等于0，且将当前同步状态修改成var3失败返回false取非变成true，说明获取锁失败
+			  共享锁也就是信号池中还有信号可以获取，直到同步状态小于0且同步状态失败才会退出循环*/
+		} while(var3 >= 0 && !this.compareAndSetState(var2, var3));
+
+		return var3;
+	}
+	/*将线程加入到同步队列尾部，且使用自旋的方式判断自己的父节点是不是头节点，如果是头节点，则去获取同步状态，
+	  如果不是，这样使用LockSupport.park(this)进行阻塞，直到被唤醒，然后再去循环判断自己是不是头节点，直到
+	  到自己是头节点且获取同步状态成功后退出循环，且每次都会判断该线程的父节点的状态是不是等于-1等待状态，
+	  如果是，则会退出循环，且抛出线程被中断的异常*/
+	private void doAcquireSharedInterruptibly(int var1) throws InterruptedException {
+		/*创建一个node节点使用cas保证线程安全的方式加入到同步队列尾部中*/
+        AbstractQueuedSynchronizer.Node var2 = this.addWaiter(AbstractQueuedSynchronizer.Node.SHARED);
+        boolean var3 = true;
+
+        try {
+            AbstractQueuedSynchronizer.Node var4;
+            do {
+                var4 = var2.predecessor();
+				//如果当前节点父节点等于头节点true
+                if(var4 == this.head) {
+					/*获取同步状态，返回同步状态的值*/
+                    int var5 = this.tryAcquireShared(var1);
+					/*如果大于等于0，说明获取同步状态成功*/
+                    if(var5 >= 0) {
+                        this.setHeadAndPropagate(var2, var5);
+						//将头节的next节点置为null，也就是将这个头节点从同步队列中脱钩，垃圾回收时会将它回收掉
+                        var4.next = null;
+                        var3 = false;
+                        return;
+                    }
+                }
+			/*shouldParkAfterFailedAcquire这个方法是是判断该线程节点(var2)的父节点(var4)，如果父节点为-1等待状态则返回true；
+			  如果父节点为1取消状态则，则再往上找父节点的父节点直到找到一个不是取消状态的节点位置将它设置为该节点的父节点，
+			  且返回false；如果父节点不是取消状态，则使用cas将父节点设置-1等待状态，且返回false*/
+			/*
+			  如果shouldParkAfterFailedAcquire返回true，则运行parkAndCheckInterrupt，该方法使用LockSupport.park(this)将该
+			  线程阻塞，等待调用LockSupport.unpark(this)被唤醒，当被唤醒后调用Thread.interrupted()判断该现线是否被中断，
+			  这是返回false未中断。
+			*/
+            } while(!shouldParkAfterFailedAcquire(var4, var2) || !this.parkAndCheckInterrupt());
+
+            throw new InterruptedException();
+        } finally {
+			/*为true，将同步队列中的var2节点设置为取消，也就是取消锁的竞争，将节点上的状态设置为取消；
+			  当头节点释放锁后唤醒后继节点的时候，会去检查这个后继节点是否为取消状态，如果为取消状态，
+			  则会从这个同步队列的尾部往前寻找，一直找到一个不为取消状态的节点为止，这也是同步队列
+			  为什么设计成双向链表的原因
+			*/
+            if(var3) {
+                this.cancelAcquire(var2);
+            }
+
+        }
+    }
+	总结成3步骤：
+		1.判断当前线程是否被中断，如果被中断抛出中断异常，如果没有中断，则进入第二步
+		2.调用我们semaphore实现的AQS提供的共享锁的模板发方法tryAcquireShared,该方法使用cas方式将同步状态做递减，如果递减出
+		  的值大于等于0说明获取同步状态成功，否则就失败的话就进入第三步
+		3.将当前线程加入到同步队列的尾部，再判断当前线程的父节点是不是头节点，如果是则使用cas方式获取同步状态，如果父节点
+		  不是头节点或者是头节点但是获取同步状态失败，则使用LockSupport.park(this)阻塞线程，直到等待realease调用
+		  LockSupport.unpark(this)唤醒该线程，重复以上操作，直到获取到同步状态，也就是一种自旋(死循环)的方式获取的过程。
+	(2)release释放信号（也就是释放锁）
+		public void release() {
+			this.sync.releaseShared(1);//释放同步器
+		}
+		public final boolean releaseShared(int var1) {
+			/*这个是Semaphore自己实现的AQS同步器中的模板方法，也就是具体释放;
+			  内部使用自旋的方式进行递增归还，直到成功返回true
+			  */
+			if(this.tryReleaseShared(var1)) {
+				this.doReleaseShared();
+				return true;
+			} else {
+				return false;
+			}
+		}
+		/*这个是AQS提供子类实现的模板方法，使用自旋的方式进行递增归还，直到成功返回true*/
+		protected final boolean tryReleaseShared(int var1) {
+            int var2;
+            int var3;
+            do {
+				/*获取同步状态的值*/
+                var2 = this.getState();
+                var3 = var2 + var1;
+                if(var3 < var2) {
+                    throw new Error("Maximum permit count exceeded");
+                }
+			/*使用自旋的方式，使用cas将同步状态归还*/
+            } while(!this.compareAndSetState(var2, var3));
+
+            return true;
+        }
+		/*将当前头节点的状态设置成0默认状态，将当前头节点的后继节点唤醒，
+		 如果当前节点的后继节点为空或者为取消状态，则从同步队列中的尾部开始往前寻找到
+		一个不是取消状态的节点为止，并将他唤醒*/
+		private void doReleaseShared() {
+			while(true) {
+				AbstractQueuedSynchronizer.Node var1 = this.head;
+				/*当前头节点不为空，且当前头节点不为空*/
+				if(var1 != null && var1 != this.tail) {
+					int var2 = var1.waitStatus;
+					/*当前头节点为-1等待状态*/
+					if(var2 == -1) {
+						/*将头节点的状态修改为0默认状态，如果失败，结束本次循环*/
+						if(!compareAndSetWaitStatus(var1, -1, 0)) {
+							continue;
+						}
+						/*使用LockSupport.unpark(Thread thread)将当前头节点的后继节点唤醒,
+						如果当前节点的后继节点为空或者为取消状态，则从同步队列中的尾部开始往前寻找到
+						一个不是取消状态的节点为止，并将他唤醒*/
+						this.unparkSuccessor(var1);
+					} else if(var2 == 0 && !compareAndSetWaitStatus(var1, 0, -3)) {
+						continue;
+					}
+				}
+				/*将当前节点设置成了头节点后退出自旋*/
+				if(var1 == this.head) {
+					return;
+				}
+			}
+		}
+	总结成2步骤：
+		1.调用我们semaphore实现的AQS提供的共享锁的模板发方法tryReleaseShared，该方法使用cas方式将同步状态做递增，
+		  里面使用了一个自旋的递增的方式，归还同步状态，直到成功返回true。
+		2.唤醒当前头节点的后继节点， 如果当前节点的后继节点为空或者为取消状态，则从同步队列中的尾部开始往前寻找到
+		  一个不是取消状态的节点为止，并将它唤醒。
+3.semaphore实现了fair(公平锁)和nonfair(非公平锁)的实现
+  公平锁：
+	  tryAcquire方法，该方法与nonfairTryAcquire(int acquires)比较，唯一不同的位置为判断条件多了hasQueuedPredecessors()方法，
+	  即加入了同步队列中当前节点是否有前驱节点的判断，如果该方法返回 true，则表示有线程比当前线程更早地请求获取锁，
+	  因此需要等待前驱线程获取并释放锁之后才能继续获取锁。
+  非公平锁：
+	  lock方法直接使用compareAndSetState(0, 1)获取锁，如果失败再调用acquire(1)方法，该方法又会再次使用tryAcquire再次换取一次，
+	  如果还失败，再调用acquireQueued方法将当前线程加入到同步队列中。
+  效率：
+	非公平锁效率更高，因为CPU在恢复一个被挂起的线程与该线程真正开始运行之间存在着严重的延时问题；所以默认情况下采用的是使用
+	非公平锁，也可以通过构造函数的方式设置成公平锁new Semaphore(int var1(state状态共享参数最大值),boolean var2(flase非公平true公平));。
+
+4.结论
+	semaphore的内部实现其实就是使用的AQS同步器的共享锁，来实现信号量的个数的。
+  

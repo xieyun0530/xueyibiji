@@ -1,0 +1,400 @@
+hash冲突中的开放寻址是什么意思？
+jdk1.7中hashMap中链表为什么会造成环形引用？
+
+1.常用的位运算
+    位与 & (1&1=1 0&0=0 1&0=0)
+    位或  |  (1|1=1 0|0=0 1|0=1)
+    位非  ~(~1=0  ~0=1)
+    位异或 ^ (1^1=0 1^0=1  0^0=0)
+    有符号右移>>(若正数,高位补0,负数,高位补1)
+    有符号左移<<
+    无符号右移>>>(不论正负,高位均补0)
+  取模性质：取模a % (2^n) 等价于 a & (2^n - 1)，位运算比取模运算效率高，所以map里的数据个数一定是
+            2的乘方数，计算key值在哪个元素的中的时候，就使用位运算来定位。
+2.位运算运用场景
+  Java中的类修饰符、成员变量修饰符、方法修饰符，比如Class类中
+  Java容器中的HashMap和ConcurrentHashMap的实现
+  权限控制或者商品属性
+  简单可逆加密，比如异或运算(1^1=0  ; 0^1=1 )
+3.jdk1.7中hashMap为什么会造成死循环
+    浅显的用一句话来讲：
+        HashMap之所以在并发下的扩容造成死循环，是因为多个线程并发进行时，因为一个线程先期完成了扩容，
+        将原Map的链表重新散列到自己的表中，并且链表变成了倒序，后一个线程再扩容时，又进行自己的散列，
+        再次将倒序链表变为正序链表。于是形成了一个环形链表，当get表中不存在的元素时，造成死循环。
+    网链的过程分析：
+        a和b两个线程同时排序，a线程执行到next被挂起，此时next为7，然后b线程进行排序后，即头节点指向7，
+        7指向3，3指向null；然后a线程再来排序，此时7的next为3，根据头插法，3会被插入到7前面，
+        因此，头节点指向3，3指向7，由于7指向的3，因为7不是指向null，因此，
+        在对数组下标为3里面元素进行get一个不存在的值时就会在3和7里面循环
+
+        线程b排序后是7、3，线程a拿到的是7的引用，7的下一个是3吧？
+        那就会把3放到7前面啊，就是3、7，此时3、7就互相引用了啊
+
+    自己的分析：
+    对象在JVM中对象分布的概念：
+        分析HashMap造成循序的原因需要弄清楚一个问题，就是假设Object o=new Object(); Object o1=o;这里其实
+        在jvm执行第一句代码的时候是到堆里面创建一个Object对象的实例，然后到栈里面创建一个o对象的引用指向堆中的
+        实例，到第二句代码，就是直接到栈中创建一个o1对象的引用指向推中的Object对象的实例；也就是说o和o1其实指向
+        的是同一个对象实例。
+    jdk1.7中HashMap中的数据结构？
+        内部是一个Entry数组，然后Entry元素中有一个单向链表，用来解决hash冲突的。
+    为什么会造成死循环?
+        造成死循环是因为多线程情况下，HashMap扩容导致的.
+    HashMap扩容的过程？
+        当超过负载因子设定的阀值后，会将Entry数组扩容到原Entry数组的2倍，在resize()方法会创建一个原数组2倍大小的
+        Entry的数组，然后使用transfer()方法将原来的Entry数组的值，复制到新的Entry数组中，复制的过程中，因为数组
+        大小发生了变化，所以会以key的hash取模的方式重新计算Entry元素在Entry数组中元素的下标。
+    假设一个场景有一个HashMap长度为2，里面有三个元素分别是key:3-value:A、key:7-value:B、key:5-value:C，这三个
+    元素经过将key的Hash值取模运算后，这三个元素都挂在了Entry数组下标为1的元素下形成了一个链表：key:3-value:A----->
+    key:7-value:B----->key:5-value:C，现在有两个线程A线程和B线程，对HashMap同时进行扩容，具体过程如下：
+        (1)首先会创建一个长度为4的Entry,然后将之前的Entry数组的元素放入到新Entry数组中
+        (2)如果是单线程：因为jdk1.7中使用的是头插法，所以单线程情况下，新的Entry数组的下标为3的元素会如下
+            key:7-value:B----->key:3-value:A,而key:5-value:C经过key的Hash取模算法后，放入到了新的Entry数组下标为1中。
+        (3)如果是多线程：当A线程第一次执行到for循环的Entry<k,v> next = e.next的时候，这个时线程A被挂起，这个时候A线程
+           还没有放入任何元素到新Entry数组中，这个时候B线程执行了，将原来的Entry数组中的值，放入到新的数组Entry中，
+           放入后如下 key:7-value:B----->key:3-value:A以链表的方式放入到新Entry数组中下标为3中，key:5-value的放入新的
+           Entry数组中下标为1中；这个时候A线程被调度回来，因为B线程按照头插法已经将key:7-value:B----->key:3-value形成
+           了key:7-value:B的next的指向了key3，而key:3-value的next指向null，然后按照jvm的对象赋值原则，A线程看到了就是
+           key:7-value:B----->key:3-value这样的链表，然后A线程将key:7-value:B按照头插法，将B线程的结果进行了倒序，
+           也就是变成了key:3-value----->key:7-value:B,这样key3的next指向key7，但是B线程将key7的next指向的是key3，这样
+           就出现了key:3-value的next--->key:7的next--->key:3，这样就产生了一个key3指向key7而key7又指向ky3的循环链条。
+        (4)当循环取这整个Map中的值的时候就会出现死循环。当get一个在Entry数组中下标为3的不存在的值的时候会造成死循环。
+
+
+4.ConcurrentHashMap
+    使用 putIfAbsent：
+        如果传入key对应的value已经存在，就返回存在的value，不进行替换。如果不存在，就添加key和value，返回null
+    构成：
+        它是由Segment数组结构和HashEntry数组结构组成。
+
+        Segment是一种可重入锁(ReentrantLock)，在ConcurrentHashMap里扮演着锁的角色；HashEntry用于存储键值对数据
+        数据结构，一个ConcurrentHashMap里包含一个Segment数组。Segment的结构和HashMap类似，是一种数组和链表结构。
+        一个Segment里包含一个HashEntry数组，每个HashEntry是一个链表结构的元素，每个Segment守护着一个HashEntry
+        数组里的元素，当对HashEntry数组的数据进行修改时，必须首先获得与它对应的Segment锁。
+
+        ConcurrentHashMap初始化方法是通过initialCapacity、loadFactor和concurrencyLevel(参数concurrencyLevel是
+        用户估计的并发级别，就是说你觉得最多有多少线程共同修改这个map，根据这个来确定Segment数组的大小
+        concurrencyLevel默认是DEFAULT_CONCURRENCY_LEVEL = 16;)等几个参数来初始化segment数组、
+        段偏移量segmentShift、段掩码segmentMask和每个segment里的HashEntry数组来实现的。
+
+        ConcurrentHashMap会使用大于等于该值的最小2幂指数作为实际并发度（假如用户设置并发度为17，实际并发度则为32）。
+    如何定位元素：
+        在插入和获取元素的时候，必须先通过散列算法定位到Segmen，ConcurrentHashMap会首先使用Wang/Jenkins hash的
+        变种算法对元素的hashCode进行一次再散列，然后Segment(使用了散列值的高位部分)，而元素定位这使用全部的hash值
+        进行定位。
+    如何保证并发读：
+        将HashEntry数组设置为volatile，通过volatile保证get总是可以拿到最新值。
+
+
+
+
+1.ConcurrentHashMap在1.7中的实现
+    构造方法的初始化：
+        ConcurrentHashMap 初始化方法是通过 initialCapacity、loadFactor 和 concurrencyLevel(参数 concurrencyLevel
+        是用户估计的并发级别，就是说你觉得最 多有多少线程共同修改这个 map，根据这个来确定 Segment 数组的大小
+        concurrencyLevel 默认是 DEFAULT_CONCURRENCY_LEVEL = 16;)等几个参数来初始 化 segment 数组、
+        段偏移量 segmentShift、段掩码 segmentMask 和每个 segment 里的 HashEntry 数组来实现的。
+        简单来讲就是默认16个segment，也可以通过构造传入，但是内部是使用的是大于当前数的一个2次方的一个数。
+    get方法：
+        get操作经过一个再散列，使用这个散列值得高位部分运算得到Segment的位置,再通过整个散列值运算得到table位置。
+        整个get是没有加锁的，而是通过volatile保证get总是可以拿到最新的值。
+    put方法：
+       1.ConcurrentHashMap 初始化的时候会初始化第一个槽 segment[0]，对于其他槽，在插入第一个值的时候再进行初始化。
+        ensureSegment 方法考虑了并发情况，多个线程同时进入初始化同一个槽segment[k]，但只要有一个成功就可以了；使用
+        CAS自旋保证多个线程下只有一个线程可以成功初始化。
+       2.初始化成功后，进行put因为segment继承了ReentrantLock锁，所以在segment中的put方式使用tryLock方法获取锁，如果
+        没有获得锁，则调用使用自旋等待获得锁，在自旋获得锁的过程中，会对对应的hashcode的链表进行遍历，如果遍历完后
+        找不到与key相同的HashEntry，则为后续的的put操作提前创建一个HashEntry(这是设计者为了提供CPU利用率而设计的)，
+        当tryLock获得一定次数(如果CPU空闲核数大于1则重试64次，如果小于1则重试1次)仍然无法所得锁，则通过lock获得，这
+        个lock内部是先使用tryLock尝试获取一次锁，如果获取失败，则将这个加入到同步等待队列中。
+       3.在获得锁后，segment对链表进行遍历，如果HashEntry节点具有相同的key，则更新该HashEntry的value值；否则新建一个
+        HashEntry节点，采用头插法，将原来的头节点设置为新head的下一个节点；新建过程中如果节点数(包含新建的HashEntry)
+        超过threshold(阀值),则调用rehash()方法对segment中的HashEntry数组进行扩容，最后将新的HashEntry写入到数组中。
+    rehash方法:
+        在这个扩容方法中，弄清一个算法，假设有一个如下一个table最大长度为4，那么有has值为15,23,34,56,77的元素，根据
+        hash值取模的算法，如下分布：
+        hash值           15          23          34          56          77
+        table中的下标    15%4=3      23%4=3      34%4=2      56%4=0      77%4=1
+        扩容后table 长度变为8，那么元素在table 中的分布变成：
+        hash值           15          23          34          56          77
+        table中的下标    15%8=7      23%8=7      34%8=2      56%8=0      77%8=5
+        结论：可以看见hash值为34 和56 的下标保持不变，而15,23,77 的下标都是在原来下标的基础上+4 即可，也就是在原来的
+              基础上加上原来数组的大小，刚好等于扩容2倍后的大小，可以快速定位和减少重排次数。
+        扩容就是将原来的数组中的元素，迁移到新建的数组中，然后将这个数组设置给segment中的HashEntry数组table。
+        为了避免让所有节点都进行复制操作：由于扩容是基于2的幂指数来操作的，所有基于上面的分析，就是说旧数组中的元素，
+            要么与元素组的下标保持不变或者下标等于原数组的下标加上原数组的长度。
+         该方法没有考虑并发，因为执行之前先获得到了锁。
+    remove方法：
+        与put方法一样就是先拿到锁在操作，保证了线程安全。
+    ConcurrentHashMap的弱一致性：
+        当遍历判断key是否存在以及获得该节点的value时，多线程情况下，由于其它线程可能多链表做了调整，因此get或者
+        containsKey返回的可能是过期时的数据，这是ConcurrentHashMap在弱一致上的体现。如果需要强一致，那么必须使用
+        Collections.synchronizedMap()方法。
+    size、containsValue：
+        在不加锁的情况下执行这两个方法：
+            循环所有的segment，将所有的segment中的modCount相加，在put、remove和clean方法里面，操作元素前都会对
+            modCount新进行变动；那么在操作这两个方法的时候，使用了一个自旋，在自旋中定义了两个变量，一个是循环
+            第一次的modCount之和另一个是第二次的modCount，当这两次(也就是连续两次)所有的segment的modCount之和相等，
+            那么说明没有出现其它线程修改ConcurrentHashMap的情况，就会返回获得的值，退出自旋。
+        加锁的情况下执行这两个方法：
+            加锁的就是当连续两次的modCount之和不相等时，就会对所有的segment一次加锁来获取modCount的总和，所以
+            一般来说多线程情况下尽量避免使用这个两个方法。
+2.ConcurrentHashMap在1.8下的实现
+    改进：
+      改进一：取消了segment，直接采用transient volatile HashTable<K,V>[] table保存数据，采用table中的元素
+        Node作为锁，从而实现了缩小了锁的粒度，进一步减少了并发的冲突的概率，提升了并发性能；内部使用了
+        CAS+Synchronized来保证并发的安全。
+      改进二：将原先的数组+单向链表的数据结构，修改成了table数组+单向链表+红黑树的结构；这是因为链表到了一定
+        的长度后查询效率过低，查询的某个节点复杂的为O(n)(最坏查询次数等于链表的长度)，而红黑树查询某个节点的
+        时间复杂度为O(logN)(最坏查询次数为2^N=最大长度值，这个N就表示查询次数)，能提升查询的性能。
+      jdk1.7中使用Node最为Entry元素下的链表结构，包含key，value，hash和next四个属性；
+      jdk1.8中的Entry元素中，如果是链表还是使用了Node，红黑树的情况下使用TreeNode(extends Node)；判断Entry元素
+      中第一个值是Node还是TreeNode可以判断该位置下是链表还是红黑树；
+      static final int TREEIFY_THRESHOLD = 8;用于判断链表转换成红黑树
+      static final int UNTREEIFY_THRESHOLD = 6;用于判断红黑树转换成链表
+      为什么两个不用一样的值，为了避免重复出现阀值后平凡互转的情况。
+    核心数据结构和属性：
+        Node：
+            Node是最核心的内部类，它包装了key-value 键值对；也就是ConcurrentHashMap中table数组的类型。
+            定义基本和1.7 中的HashEntry 相同。而这个map 本身所持有的也是一个Node型的数组成员变量。
+            增加了一个find 方法来用以辅助map.get()方法。其实就是遍历链表，子类中会覆盖这个方法。
+            在map 中还定义了Segment 这个类，不过只是为了向前兼容而已。
+        TreeNode：
+            树节点类，当链表过长后会转换成TreeNode；继承了Node。
+            它并不是直接转换成红黑树，而是把这些节点放到TreeBin对象中，由TreeBin完成红黑树d的包装。
+        TreeBin：
+            负责TreeNode 节点。它代替了TreeNode 的根节点，也就是说在实际的ConcurrentHashMap“数组”中，存放的是
+            TreeBin 对象，而不是TreeNode 对象。另外这个类还带有了读写锁机制。
+            简单来说就是Node数组中的元素是红黑树是，元素是一个TreeBin，TreeBin继承了Node。
+        特殊的ForwardingNode：
+            一个特殊的Node结点，hash 值为-1，其中存储nextTable的引用。有table 发生扩容的时候，ForwardingNode发挥
+            作用作为一个占位符放在table中表示当前结点为null 或者已经被移动。
+        sizeCtl：
+            用来控制table 的初始化和扩容操作。
+            负数代表正在进行初始化或扩容操作
+             -1 代表正在初始化
+             -N 表示有N-1 个线程正在进行扩容操作
+            0 为默认值，代表当时的table 还没有被初始化
+            正数表示初始化大小或Map 中的元素达到这个数量时，需要进行扩容了。
+        构造方法：
+            在new一个Map实例时，并不会创建其中的数组等等相关的部件，只是简单的设置属性而已，table的大小规定为2的乘方数。
+            真正初始化放在，调用put、computeIfAbsent、compute、merge的时候，调用使用table==null检查下。
+        get：
+            给定一个key查找对应的value，必须满足两个条件，key相同和hash相同，对于链表或红黑树上的节点，需要去遍历寻找。
+        put：
+            这个方法时沿着HashMap的put的思想，根据hash值计算这个新插入的node在table中的位置i，如果i的位置为空，直接放
+            进去；否则进行判断，如果i位置是树节点，按照树节点的插入方式插入i，否则把i插入到链表的末尾。
+            为空时直接插入node的时候使用了CAS保证了线程安全，而插入到树和链表中的时候使用synchronized加了锁。
+        transfer：
+            真个扩容分为两部分：
+                第一部分：构建了一个nextTable，它的容量是原来的两倍。
+                第二部分：将原来的table复制到nextTable中，这里允许多线程进行操作。
+                遍历和复制的流程是：
+                   1.为null或者已经处理过的节点，会被设置为forwardNode节点,当线程准备扩容时，发现是
+                    forwardNode节点，跳过这个节点，继续寻找未处理的节点，找到了对节点进行加锁。
+                   2.如果这个位置是Node 节点（fh>=0），说明它是一个链表，就构造一个反序链表，头插法。
+                   3.如果这个位置是TreeBin 节点（fh<0），也做一个反序处理，并且判断是否需要红黑树转链表，也是头插法。
+                   4.遍历过所有的节点以后就完成了复制工作，这时让nextTable作为新的table，
+                     并且更新sizeCtl为新容量的0.75 倍，完成扩容。
+            多线程扩容：
+                并发扩容其实就是将数据迁移任务拆分成多个小迁移任务，在实现上使用了一个变量stride作为步长控制，
+                每个线程每次负责迁移其中的一部分。每个线程put的时候会检查下当前是否正在扩容，如果在扩容，则调用帮助
+                扩容的方法，帮助扩容。
+        remove：
+            删除跟put差不多，只是插入元素变成了，删除元素，如果存在红黑树，删除成功后，会检查是否需要转成链表。
+        treeifyBin：
+            用于将过长的链表转换为TreeBin 对象。但是他并不是直接转换，而是进行
+            一次容量判断，如果容量没有达到转换的要求，直接进行扩容操作并返回；如果
+            满足条件才将链表的结构转换为TreeBin ，这与HashMap 不同的是，它并没有
+            把TreeNode 直接放入红黑树，而是利用了TreeBin 这个小容器来封装所有的
+            TreeNode。
+        size
+            在JDK1.8 版本中，对于size 的计算，在扩容和addCount()方法就已经有处理
+            了，可以注意一下Put 函数，里面就有addCount()函数，早就计算好的，然后你
+            size 的时候直接给你。JDK1.7 是在调用size()方法才去计算，其实在并发集合中去
+            计算size 是没有多大的意义的，因为size 是实时在变的。
+
+            在具体实现上，计算大小的核心方法都是sumCount()
+            counterCells 。其实baseCount 就是记录容器数量的，而counterCells 则是记录
+            CAS 更新baseCounter 值时，由于高并发而导致失败的值。这两个变量的变化在
+            addCount() 方法中有体现，大致的流程就是：
+            1、对baseCount 做CAS 自增操作。
+            2、如果并发导致baseCount CAS 失败了，则使用counterCells。
+            3、如果counterCells CAS 失败了，在fullAddCount 方法中，会继续死循环
+                操作，直到成功。
+3.并发下的Map常用面试题
+    1.HashMap与HashTable有什么区别？
+        (1)HashMap是线程不安全的，HashTable线程安全
+        (2)由于线程安全，所以HashTable的效率比HashMap要低
+        (2)HashMap的key可以有一个为null，value可以多个为null，而HashTable不允许为null
+        (4)HashMap的初始容量为16，扩容为当前的2倍，而HashTable的初始化容量为11，扩容为当前的2倍+1
+        (5)扩容后HashMap需要重新计算hash值，而HashTable则直接使用对象的HashCode
+    2.java中的另一个线程安全的与HashTable及其类似的类是什么？同样是线程安全，它与HashTable在线程同步上有什么区别？
+        (1)ConcurrentHashMap类(是java并发包java.util.concurrent中提供的一个线程安全且高效的HashMap实现)。
+        (2)HashTable使用synchronized关键字加锁的原理（就是对对象加锁）；而ConcurrentHashMap，在jdk1.7中使用segment
+           分段锁的方式，jdk1.8使用了CAS(无所算法)+synchronized，锁的是table元素，缩小了锁的粒度。
+    3.HashMap和ConcurrentHashMap的区别？
+        (1)除了加锁，原理上无其它差别
+        (2)HashMap允许键值对为null，而ConcurrentHashMap都不允许
+        (3)在红黑树节点类上继承的类不一样，HashMap继承的是LinkHashMap中的Entry，
+           而ConcurrentHashMap中继承的是内部节点类Node。
+    4.为什么ConcurrentHashMap的效率比HashTable高？
+        (1)因为HashTable使用的是一把锁synchronized锁住了整个table
+        (2)ConcurrentHashMap在1.7中采用了segment分段锁(ReentrantLock+segment+HashEntry[])，相当于把一个HashMap分成了
+          很多份，也就是每一个segment分配一个锁，这样支持多线程访问，锁的粒度是segment的个数；
+          而1.8中则使用的是CAS+synchronized+Node(链表结构的类)+红黑树，锁的粒度是Node(首节点)，锁的粒度：每一个Node
+          粒度更加低了。
+    5.针对ConcurrentHashMap的具体分析？(jdk1.7 VS 1.8)
+        (1)在jdk1.7中，ConcurrentHashMap采用的分段锁，也就是segment，segment下存储的一个HashEntry数组，而HashEntry
+           是一个链表结构，所以底层存储数据是使用的一个数组+链表结构；而segment继承了ReentrantLock锁，每个segment采用
+           这个锁来来保证segment下HashEntry数组的线程安全问题，也就是多线成情况下没一个segment只需要有一个线程对它下面
+           的EntryHash数组中的元素修改，锁的粒度就是segment的数量。
+        (2)而在jdk1.8中采用的是Node+CAS+synchronized的方式，数据储存在一个Node的数组中，当多线程对数组中的元素修改时，
+           锁的是Node数组中的某个元素Node，这样缩小了锁的粒度，粒度为Node数组的长度，而且当Node数组中链表超过8后会
+           将链表转换成红黑树，反过来当红黑树的个数小于6是又将红黑树装换成链表，而在当node为空的时候，使用的是CAS直接
+           插入保证线程安全，node有元素的时候使用了synchronized加锁，还有get中也使用CAS找到key对应的node节点。
+    6.ConcurrentHashMap中jdk1.8中为什么使用synchronized来代替可重入锁ReentrantLock？
+        (1)因为在jdk1.8中JVM团队对synchronized做了大量的优化，引入了偏向锁、轻量级锁、重量级锁的，而且基于synchronized
+           优化的空间更大。
+        (2)在大量的并发数据下，对于JVM的内存压力，基于API的ReentrantLock的开销更加大
+    7.ConcurrentHashMap的简介？
+        (1)重要的常量sizeCtl：
+            为负数时，-1表示正在初始化，-N表示N-1个线程正在扩容；为0时，表示table还没有初始化；
+            当为正数时，表示下一次初始化或者扩容的大小
+        (2)数据结构：
+            Node继承了HashMap中的Entry，用于数据存储；TreeNode继承了Node，用于存储红黑树类型的数据；
+             TreeBin继承了Node，但是它封装了TreeNode容器，提供将转换红黑树的一些条件和锁的机制
+        (3)存储对象时的put：
+            1.如果没有初始化，则调用initTable()方法进行初始化
+            2.判断下如果正在扩容，就先帮助扩容
+            3.判断node上的元素是否为空，也就是没有hash冲突的意思，则使用CAS直接插入，
+            4.如果不为空，也就是存在hash冲突：这样分为两种情况，一种时链表直接插入到链表的尾部，一种时红黑树按照红黑树
+              插入到红黑树中
+            5.如果链表的长度大于8，就要将链表装换成红黑树
+            6.如果添加成功则调用addCount()方法统计size，并判断是否需要扩容
+        (4)扩容方法transfer：
+            默认时16，扩容时增大两倍，扩容时其它线程helpTransfer()帮助扩容，提供扩容效率
+        (5)获取元素时使用get方法
+            1.计算hash值，定位到table索引位置，如果节点符合就返回
+            2.如果遇到扩容时，会调用标记正在扩容的节点的ForwardingNode.find()方法，查找该节点进行匹配，匹配到就返回
+            3.以上如果都不匹配，就遍历下面的所有节点，如果还是匹配就返回，到最后都不匹配就返回null
+    8.ConcurrentHashMap的并发粒度是什么？
+        (1)jdk1.7中ConcurrentHashMap默认segment大小为16也就是并发度为16，也可以在构造函数中用户设置，ConcurrentHashMap
+            会采用大于该值的最小的2的幂指数作为实际并发度。(就是假设设置并发度为17，使用则会是32)
+        (2)因为jdk1.8中锁的是Node元素，可以这么说只有发生了hash冲突才会加锁，而且是加在冲突的这个节点上，所有这个并发度
+           其实对于jdk1.8没有太大的实际意义。
+
+
+
+1.ConcurrentSkipList系列
+    ConcurrentSkipListMap   有序Set
+    ConcurrentSkipListSet   有序Set
+    TreeMap 和 TreeSet 使用红黑树按照 key的顺序（自然顺序、自定义顺序） 来使得键值对有序存储，但是只能在单线程下安全使用；
+    多线程下想要使键值对按照key的顺序来存储，则需要使用 ConcurrentSkipListMap和 ConcurrentSkipListSet，分别用以代替
+    TreeMap和TreeSet，存入的数据按 key 排 序。在实现上，ConcurrentSkipListSet 本质上就是 ConcurrentSkipListMap。
+2.了解什么是SkipList
+    二分查找AVL树查找
+        二分查找要求元素可以随机访问，所以决定了需要把元素存储在连续内部，这样查找确实很快，但是插入和删除元素的时候，为了
+        保证元素的有序性，就需要大量的移动元素。
+        如要需要一个又能快速查找又能删除元素的结构，首先就是二叉树，但是二叉树在最坏的情况下会变成一个链表。
+        于是就出现了二叉平衡树，根据平衡算法不同又有AVL树，B-Tree，B+Tree，红黑树等，但是AVL树的实现比较复杂，平衡比较难
+        理解，这个时候可以使用SkipList跳跃表。
+    什么是跳表：
+        跳表其实是一种“空间换时间”的一种算法，链表的每个节点不仅记录next节点位置，还可以按照level层级分别记录后继第level
+        个节点；此法使用的就是“先大步查找确定范围，再逐渐做小迫近”的思想查找，跳跃表在算法效率上很接近红黑树。
+        跳跃表又称为概率，或者说是随机化的数据结构，目前开源软件 Redis 和 lucence 都有用到它。
+
+        都是线程安全的 Map 实现，ConcurrentHashMap 的性能和存储空间要优于 ConcurrentSkipListMap，
+        但是 ConcurrentSkipListMap 有一个功能： 它会按照键的 顺序进行排序。
+3.ConcurrentLinkedQueue
+    它是一个基于链表无界线程安全的队列，该队列是一个先进先出的原则，头出，尾进。
+        concurrentHashMap.add("c");//内部其实就是调用了offer
+        concurrentHashMap.offer("d");//将制定的元素插入到队列的尾部
+        concurrentHashMap.peek("c");//检索并不移除队列的头，如果队列为空返回null
+        concurrentHashMap.add("c");//检索并移除队列的头，如果队列为空返回null
+4.写时复制容器
+    什么是写时复制容器
+        CopyOnWriteArrayList和CopyOnWriteArraySet
+        复制容器的意思是，当向这个容器中添加数据的时候，先copy一份到新的容器，然后将新的数据添加了新的容器，最后将旧的容器
+        的引用指向新的容器。
+        这是一种读写分离的思想，读的时候读的是旧数据，写的时候是写的新数据，这样就不用加锁。
+        这个并发容器用于绝大部的是读的场景，且只是偶尔写的场景，比如白名单、黑名单、商品类目的访问和更新场景。
+    使用CopyOnWriteMap要注意的两件事：
+        1.减少内存开销，根据实际业务初始化CopyOnWriteMap的大小，避免写的时候CopyOnWriteMap扩容的开销。
+        2.使用批量添加，因为每次添加都会进行扩容，减少写次数，可以减少复制的次数。
+    性能问题：
+        因为每次新增的时候都会复制一份，所有内存占用很大。
+    数据一致性问题：
+        CopyOnWriteMap只能保证最终一致性，不能马上的读取到新的数据。
+5.阻塞队列BlockingQueue
+    队列：队列是一种先进先出的一种线性表
+    什么是阻塞队列：
+        (1)支持阻塞的插入，意思但队列满了的时候，会阻塞插入元素的线程，知道队列不满。
+        (2)支持阻塞的移除，意思是队列为空时，获取元素的线程会等待到队列变为非空。
+        方法/处理方式         抛出异常        返回特殊值       一直阻塞        超时退出
+           插入方法            add(e)           offer(e)        put(e)        offer(e,time,unit)
+           移除方法            remove()         poll()          take()        poll(time,unit)
+           检查方法            element()        peek()          不可用         不可用
+        抛出异常：当队列满时，再往队列插入元素，或者队列为空时，再获取数据，则会抛出异常。
+        返回特殊值：队列满时，插入元素成功返回true失败返回false，移除元素，有返回元素，没有返回null。
+        一直阻塞：队列满时，生产者put时，会一直阻塞，直到队列不满；队列为空时，消费者take时,会一直阻塞，直到队列非空。
+        超时退出：队列满时，插入或者移除元素时，会阻塞一段时候后退出。
+    常用的阻塞队列：
+        ArrayBlockingQueue：一个由数组组成的有界队列
+        LinkedBlockQueue：一个由链表组成的有界队列
+        PriorityBlockingQueue：一个支持优先级的无界队列
+        DelayQueue：一个使用优先级实现的无界队列
+        SynchronousQueue：一个不存元素的无界队列
+        LinkedTransferQueue：一个链表结构组成的无界队列
+        LinkedBlockDeque：一个链表组成的双向队列
+    ArrayBlockingQueue：
+        数组实现的有界队列，按照先进先出的原则进行排序，默认情况下不保证线程的公平的访问队列，构造时提供参数可以设置。
+    LinkedBlockQueue：
+        链表实现的有界队列，链表的最大值是Integer.MAX_VALUE，按照先进先出进行排序。
+    Array实现和Linked实现的区别：
+        1.队列的锁不同
+            ArrayBlockingQueue中的锁是没有分离的，也就是生产和消费用的同一把锁。
+            LinkedBlockQueue中的锁是分离的，即生产者用的是putLock，消费是takeLock。
+        2.在生产消费不同
+            ArrayBlockingQueue生产与消费的时候，直接将枚举对象插入或移除。
+            LinkedBlockQueue生产消费的时候，需要将枚举对象转换成Node<E>进行插入或移除，影响性能。
+        3.队列的大小不同
+            ArrayBlockingQueue实现的时候必须指定一个大小。
+            LinkedBlockQueue实现的时候可以不指定大小，但是默认大小是Integer.MAX_VALUE。
+    PriorityBlockQueue：
+        支持优先级的队列，默认情况下元素采取自然升序排列，也可以通过compareTo()方法指定元素排序规则，或者构造时使用
+        Comparator来进行排序，不能保证同优先级元素的顺序。
+    DelayQueue：
+        支持延时的无界队列，队列中是使用PriorityQueue来实现，队列中的元素必须实现Delayed接口，创建是可以指定多久才能
+        获取元素，只有延期满时才能提取元素。
+        DelayQueue非常有用，可以运用在一下场景:
+            缓存系统的设计：可以用 DelayQueue 保存缓存元素的有效期，使用一个线 程循环查询 DelayQueue，
+            一旦能从 DelayQueue 中获取元素时，表示缓存有效期 到了。还有订单到期，限时支付等等。
+    SynchronousQueue：
+        不存储元素的阻塞队列，每一个put必须等待一个take操作，否则不能继续put操作；SynchronousQueue的性能高于
+        ArrayBlockingQueue和LinkedBlockQueue。
+    LinkedTransferQueue：
+        多了tryTransfer和transfer方法
+        (1)transfer
+            如果一个消费者正在等待接收元素，transfer可以把生产者的数据立刻传给消费者；如果没有消费者等待，则把元素
+            放在队列的tail节点，并且等待该消费者消费了才能返回
+        (2)tryTransfer
+            用来试探生产者传入的元素是否能传递给消费者，如果没有消费者返回false；和transfer对比无论是否有消费者接受，
+            直接返回，而transfer要等到有消费者接受了才能返回。
+    LinkedBlockDeque：
+        是一个双向链表，也就是即可以从头部取也可以从尾部取元素，双向阻塞队列可以运用在“工作窃取”模式中，
+        多了 addFirst、addLast、offerFirst、offerLast、peekFirst 和 peekLast 等方法；
+        以 First 单词结尾的方法，表示插入、获取（peek）或移除双端队列的第一个元 素。
+        以 Last 单词结尾的方法，表示插入、获取或移除双端队列的最后一个元素。
+        插入方法add等同于addLast，移除方法remove等效于removeFirst。
+        但是take 方法却等同于takeFirst，不知道是不是JDK的bug，使用时还是用带有First和Last后缀的方法更清楚。
+        在初始化 LinkedBlockingDeque 时可以设置容量防止 其过度膨胀。
+    阻塞队列的实现原理：
+        其实就是使用了等待和通知模式，通过查看JDK源码发现ArrayBlockingQueue使用了Condition来实现。
+
+
+
+2^N=1000
+明天记得看看位运算。。。
+怎样快速的确定一个数是奇数还是偶数，使用位运算。。。
+明天看看双重检查锁，懒汉式

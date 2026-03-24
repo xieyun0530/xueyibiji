@@ -1,0 +1,38 @@
+1.git撤销本地尚未推送（push）的代码
+    git reset --soft HEAD~1：撤销提交并保留修改（保留文件在暂存区）。
+    git reset --mixed HEAD~1：撤销提交并保留修改（将文件移出暂存区，保留在工作区）。
+    git reset --hard HEAD~1：撤销提交并删除所有本地更改（恢复到上次提交的状态）。
+    git checkout -- . 或 git restore --source=HEAD -- .：撤销工作区的修改，恢复到最近的提交状态。
+    git reset：移除暂存区的文件，但保留工作区修改。
+2.Can't checkout because of unmerged files
+      You have to resolve all merge conflicts before checkout.
+      After resolving conflicts you also probably would want to commit your files to the current branch.
+    可以先尝试执行该命令：git reset --hard FETCH_HEAD
+3.Untracked Files Prevent Checkout
+    git status 查看冲突文件
+    git clean -f 删除冲突文件
+    git rm 删除冲突文件
+4.Changes not staged for commit:
+    (use "git add <file>..." to update what will be committed)
+    (use "git restore <file>..." to discard changes in working directory)
+          modified:   pay-base-core/src/main/java/com/veepai/pay/config/AsyncConfig.java
+    # 将修改添加到暂存区
+    git add pay-base-core/src/main/java/com/veepai/pay/config/AsyncConfig.java
+    # 提交更改，并添加有意义的提交信息
+    git commit -m "Describe the changes made to AsyncConfig.java, such as 'Update async configuration settings'"
+    git restore pay-base-core/src/main/java/com/veepai/pay/config/AsyncConfig.java
+    解决完成后再到idea中进行push就能push了
+5.You have not concluded your merge (MERGE_HEAD exists). Please, commit your changes before you merge.
+    说明你上一次执行 git merge 时发生了冲突，并且还 没有完成 合并（Git 正在等待你手动解决冲突后提交）。
+    放弃合并：git merge --abort
+6.放弃当前merge
+    git merge --abort
+7.reference conflict due to case-insensitive filesystem错误，核心原因是本地使用的是大小写不敏感的文件系统,
+    比如 feature/TF/DZ-3796 和 feature/tf/DZ-3796），Git 的默认存储方式无法区分这些分支，导致拉取时引用冲突
+    解决办法：
+        清理远程分支命令
+        git fetch --prune
+        git refs migrate --ref-format=reftable
+
+
+
